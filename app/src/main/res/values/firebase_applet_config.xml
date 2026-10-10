@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <resources>
-    <string name="firestore_database_id" translatable="false">ai-studio-android-sociofin-f5c4d9c9-4d8d-45b8-8b46-ebee3a314cda</string>
+    <!-- Base de datos de Firestore que usa la app.
+         El proyecto propio de Firebase solo tiene la base "(default)".
+         El proyecto original de Google AI Studio usaba una base con nombre
+         personalizado; si alguna vez hay que volver a el, basta con escribir
+         aqui su identificador completo. -->
+    <string name="firestore_database_id" translatable="false">(default)</string>
 </resources>
