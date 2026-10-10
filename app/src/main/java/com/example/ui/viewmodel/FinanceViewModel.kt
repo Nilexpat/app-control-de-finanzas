@@ -181,8 +181,13 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             if (storedId != null) {
                 val stored = repository.getMemberById(storedId)
                 if (stored != null && stored.googleUid == uid) {
-                    _currentMember.value = stored
-                    if (stored.groupId.isNotBlank()) _selectedGroupId.value = stored.groupId
+                    if (stored.groupId.isNotBlank()) {
+                        // selectGroup deja _selectedGroupId y _currentMember coherentes
+                        selectGroup(stored.groupId)
+                    } else {
+                        _currentMember.value = stored
+                        persistCurrentMemberId(stored.id)
+                    }
                     return@launch
                 }
             }
@@ -190,9 +195,14 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             // Ya es miembro de alguna empresa
             val existing = repository.getMemberByGoogleUidAnywhere(uid)
             if (existing != null) {
-                _currentMember.value = existing
-                if (existing.groupId.isNotBlank()) _selectedGroupId.value = existing.groupId
-                persistCurrentMemberId(existing.id)
+                // Se usa selectGroup para que el grupo seleccionado y el miembro
+                // actual queden siempre coherentes entre si.
+                if (existing.groupId.isNotBlank()) {
+                    selectGroup(existing.groupId)
+                } else {
+                    _currentMember.value = existing
+                    persistCurrentMemberId(existing.id)
+                }
                 return@launch
             }
 
@@ -214,14 +224,19 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun selectGroup(groupId: String) {
         _selectedGroupId.value = groupId
         viewModelScope.launch {
-            val uid = _authenticatedUser.value?.uid
-            if (uid == null) {
+            val user = _authenticatedUser.value
+            if (user == null) {
                 _currentMember.value = null
                 return@launch
             }
             // Solo se vincula si el usuario pertenece a ese grupo; si es nuevo
             // se crea como SOCIO (nunca sobrescribe al administrador existente).
-            val member = repository.linkGoogleAccountToGroup(groupId, uid, "", "")
+            val member = repository.linkGoogleAccountToGroup(
+                groupId = groupId,
+                googleUid = user.uid,
+                displayName = user.displayName ?: "",
+                email = user.email ?: ""
+            )
             _currentMember.value = member
             persistCurrentMemberId(member.id)
         }
