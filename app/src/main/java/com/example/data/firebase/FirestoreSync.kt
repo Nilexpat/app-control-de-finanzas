@@ -40,9 +40,12 @@ internal fun Map<String, Any?>.double(key: String, def: Double = 0.0): Double =
 internal fun Map<String, Any?>.bool(key: String, def: Boolean = false): Boolean =
     (this[key] as? Boolean) ?: def
 
-internal fun <T : Enum<T>> Map<String, Any?>.enum(key: String, def: T): T {
+// `enumValueOf<T>()` es inline y exige un tipo reified, que no se puede usar
+// dentro de una funcion normal. Se usa java.lang.Enum.valueOf con la clase
+// explicita, que si funciona en tiempo de ejecucion.
+internal fun <T : Enum<T>> Map<String, Any?>.enum(key: String, type: Class<T>, def: T): T {
     val raw = this[key] as? String ?: return def
-    return runCatching { enumValueOf<T>(raw) }.getOrDefault(def)
+    return runCatching { java.lang.Enum.valueOf(type, raw) }.getOrDefault(def)
 }
 
 // --- Group ---
@@ -88,7 +91,7 @@ internal fun Map<String, Any?>.toMember(): Member = Member(
     groupId = str("groupId"),
     name = str("name"),
     email = str("email"),
-    role = enum("role", Role.SOCIO),
+    role = enum("role", Role::class.java, Role.SOCIO),
     active = bool("active", true),
     sharePercentCentecimas = int("sharePercentCentecimas", 4000),
     initialDebtCop = long("initialDebtCop"),
@@ -147,10 +150,10 @@ internal fun Map<String, Any?>.toMovement(): Movement = Movement(
     id = str("id"),
     groupId = str("groupId"),
     orderCode = str("orderCode"),
-    type = enum("type", MovementType.VENTA),
+    type = enum("type", MovementType::class.java, MovementType.VENTA),
     linesJson = str("linesJson", "[]"),
     totalCop = long("totalCop"),
-    paymentMethod = enum("paymentMethod", PaymentMethod.EFECTIVO),
+    paymentMethod = enum("paymentMethod", PaymentMethod::class.java, PaymentMethod.EFECTIVO),
     transferAccountName = this["transferAccountName"] as? String,
     occurredAt = long("occurredAt"),
     recordedAt = long("recordedAt"),
@@ -200,7 +203,7 @@ internal fun Map<String, Any?>.toInvitation(): Invitation = Invitation(
     id = str("id"),
     groupId = str("groupId"),
     code = str("code"),
-    role = enum("role", Role.SOCIO),
+    role = enum("role", Role::class.java, Role.SOCIO),
     expiresAt = long("expiresAt"),
     maxUses = int("maxUses", 1),
     usedCount = int("usedCount"),
