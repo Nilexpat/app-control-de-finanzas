@@ -710,7 +710,8 @@ class FinanceRepository(private val db: AppDatabase) {
         name: String,
         creatorName: String,
         creatorEmail: String,
-        settlementMode: String = "DESEMBOLSO"
+        settlementMode: String = "DESEMBOLSO",
+        creatorGoogleUid: String = ""
     ): Result<Group> {
         if (name.isBlank()) {
             return Result.failure(IllegalArgumentException("El nombre de la empresa es obligatorio"))
@@ -736,7 +737,8 @@ class FinanceRepository(private val db: AppDatabase) {
             role = Role.ADMIN,
             active = true,
             sharePercentCentecimas = 5000,
-            initialDebtCop = 0L
+            initialDebtCop = 0L,
+            googleUid = creatorGoogleUid
         )
         memberDao.insertMember(adminMember)
 
@@ -769,14 +771,15 @@ class FinanceRepository(private val db: AppDatabase) {
 
     suspend fun deleteGroup(groupId: String, currentUser: Member): Result<Unit> {
         if (currentUser.role != Role.ADMIN) return Result.failure(IllegalAccessException("Solo un Admin puede eliminar la empresa"))
-        val allGroups = groupDao.getAllGroups().first()
-        if (allGroups.size <= 1) return Result.failure(IllegalStateException("No puedes eliminar la única empresa activa"))
+        // Se permite eliminar la ultima empresa: la app queda vacia y el usuario
+        // puede crear una nueva. Los movimientos de esa empresa se borran con ella.
         groupDao.deleteMembersByGroup(groupId)
         groupDao.deleteProductsByGroup(groupId)
         groupDao.deleteMovementsByGroup(groupId)
         groupDao.deleteAccountsByGroup(groupId)
         groupDao.deleteSettlementsByGroup(groupId)
         groupDao.deleteNotificationsByGroup(groupId)
+        groupDao.deleteMovementAuditsByGroup(groupId)
         transactionDao.deleteTransactionsByGroup(groupId)
         groupDao.deleteGroupById(groupId)
         return Result.success(Unit)
@@ -861,7 +864,20 @@ class FinanceRepository(private val db: AppDatabase) {
         return Result.success(invitation)
     }
 
-    suspend fun useInvitation(code: String, userName: String, userEmail: String): Result<Member> {
+    suspend fun getMemberById(memberId: String): Member? = memberDao.getMemberById(memberId)
+
+    suspend fun getMemberByGoogleUidAnywhere(googleUid: String): Member? =
+        memberDao.getMemberByGoogleUidAnywhere(googleUid)
+
+    suspend fun getMemberByGoogleUidInGroup(googleUid: String, groupId: String): Member? =
+        memberDao.getMemberByGoogleUidInGroup(googleUid, groupId)
+
+    suspend fun useInvitation(
+        code: String,
+        userName: String,
+        userEmail: String,
+        googleUid: String = ""
+    ): Result<Member> {
         val inv = invitationDao.getInvitationByCode(code.trim().uppercase())
             ?: return Result.failure(IllegalArgumentException("Código de invitación no válido"))
 
@@ -875,18 +891,29 @@ class FinanceRepository(private val db: AppDatabase) {
             return Result.failure(IllegalStateException("Esta invitación ya fue utilizada"))
         }
 
-        // Add member
+        // Si esta cuenta ya pertenece al grupo, se devuelve su ficha existente
+        if (googleUid.isNotBlank()) {
+            memberDao.getMemberByGoogleUidInGroup(googleUid, inv.groupId)?.let { return Result.success(it) }
+        }
+
+        // El nombre es opcional: si no se indica, se usa el correo o un generico
+        val resolvedName = userName.ifBlank {
+            userEmail.substringBefore("@").ifBlank { "Socio" }
+                .replaceFirstChar { it.uppercase() }
+        }
+        val resolvedEmail = userEmail.ifBlank { "socio@google.com" }
+
         val newMember = Member(
             groupId = inv.groupId,
-            name = userName,
-            email = userEmail,
+            name = resolvedName,
+            email = resolvedEmail,
             role = inv.role,
             active = true,
-            sharePercentCentecimas = 2000 // default 20%
+            sharePercentCentecimas = 2000, // 20% por defecto
+            googleUid = googleUid
         )
         memberDao.insertMember(newMember)
 
-        // Increment usage
         invitationDao.updateInvitation(inv.copy(usedCount = inv.usedCount + 1))
         return Result.success(newMember)
     }
@@ -908,350 +935,108 @@ class FinanceRepository(private val db: AppDatabase) {
         return Result.success(acc)
     }
 
-    // --- Seed Initial Demo Data ---
-    suspend fun seedInitialDataIfEmpty() {
-        val now = System.currentTimeMillis()
 
-        // --- Empresa 1: Café & Empanadas La Esquina ---
-        val groupId = "group_cafe_esquina"
-        if (groupDao.getGroupById(groupId) == null || productDao.getProductsByGroup(groupId).first().isEmpty()) {
-            val group = Group(
-                id = groupId,
-                name = "Café & Empanadas La Esquina",
-                createdAt = now - 30L * 24 * 3600 * 1000L
-            )
-            groupDao.insertGroup(group)
-
-            // Members
-            // Andrés (Admin) 40%, Carlos (Socio) 40%, Valentina (Socio) 0%, Empresa 20%
-            val andres = Member(
-                id = "user_andres_admin",
-                groupId = groupId,
-                name = "Andrés",
-                email = "andres@laesquina.co",
-                role = Role.ADMIN,
-                active = true,
-                sharePercentCentecimas = 4000,
-                initialDebtCop = 0L
-            )
-            val carlos = Member(
-                id = "user_carlos_socio",
-                groupId = groupId,
-                name = "Carlos",
-                email = "carlos@laesquina.co",
-                role = Role.SOCIO,
-                active = true,
-                sharePercentCentecimas = 4000,
-                initialDebtCop = 500_000L // Carried debt of $500.000
-            )
-            val valentina = Member(
-                id = "user_valentina_socio",
-                groupId = groupId,
-                name = "Valentina",
-                email = "valentina@laesquina.co",
-                role = Role.SOCIO,
-                active = true,
-                sharePercentCentecimas = 0,
-                initialDebtCop = 0L
-            )
-            memberDao.insertMembers(listOf(andres, carlos, valentina))
-
-            // Accounts
-            val accounts = listOf("Nequi", "Daviplata", "Bancolombia", "Otra")
-            for (acc in accounts) {
-                transferAccountDao.insertAccount(TransferAccount(groupId = groupId, name = acc))
-            }
-
-            // Products
-            val products = listOf(
-                Product(id = "p_cafe", groupId = groupId, name = "Café Especial (Libra)", category = "Bebidas", photoUri = "cafe", standardPriceCop = 30_000L),
-                Product(id = "p_empanada", groupId = groupId, name = "Empanada Tradicional", category = "Comidas", photoUri = "comida", standardPriceCop = 4_000L),
-                Product(id = "p_jugo", groupId = groupId, name = "Jugo Natural 16oz", category = "Bebidas", photoUri = "bebida", standardPriceCop = 7_000L),
-                Product(id = "p_sandwich", groupId = groupId, name = "Sandwich Gourmet", category = "Comidas", photoUri = "panaderia", standardPriceCop = 18_000L)
-            )
-            for (p in products) {
-                productDao.insertProduct(p)
-            }
-
-            // Seed movements matching Test Case 1 in current month:
-            val saleLine1 = MovementLine("p_cafe", "Café Especial (Libra)", 100, 3_000_000L, 30_000L)
-            val saleLine2 = MovementLine("p_empanada", "Empanada Tradicional", 500, 2_000_000L, 4_000L)
-            val sale = Movement(
-                groupId = groupId,
-                orderCode = "#V-1001",
-                type = MovementType.VENTA,
-                linesJson = JsonHelper.serializeLines(listOf(saleLine1, saleLine2)),
-                totalCop = 5_000_000L,
-                paymentMethod = PaymentMethod.EFECTIVO,
-                occurredAt = now - 3600_000L * 4,
-                recordedAt = now - 3600_000L * 4,
-                registeredByUserId = andres.id,
-                registeredByName = andres.name,
-                note = "Ventas de eventos y salón"
-            )
-            movementDao.insertMovement(sale)
-
-            val purchaseLine = MovementLine("p_cafe", "Café Especial (Materia prima)", 200, 2_000_000L, 10_000L)
-            val purchase = Movement(
-                groupId = groupId,
-                orderCode = "#C-1002",
-                type = MovementType.COMPRA,
-                linesJson = JsonHelper.serializeLines(listOf(purchaseLine)),
-                totalCop = 2_000_000L,
-                paymentMethod = PaymentMethod.TRANSFERENCIA,
-                transferAccountName = "Bancolombia",
-                occurredAt = now - 3600_000L * 3,
-                recordedAt = now - 3600_000L * 3,
-                registeredByUserId = andres.id,
-                registeredByName = andres.name,
-                note = "Compra de bultos de café verde"
-            )
-            movementDao.insertMovement(purchase)
-
-            val loan = Movement(
-                groupId = groupId,
-                orderCode = "#P-1003",
-                type = MovementType.PRESTAMO,
-                linesJson = "[]",
-                totalCop = 1_000_000L,
-                paymentMethod = PaymentMethod.TRANSFERENCIA,
-                transferAccountName = "Nequi",
-                occurredAt = now - 3600_000L * 2,
-                recordedAt = now - 3600_000L * 2,
-                registeredByUserId = carlos.id,
-                registeredByName = carlos.name,
-                debtorMemberId = carlos.id,
-                debtorMemberName = carlos.name,
-                note = "Retiro para gastos personales"
-            )
-            movementDao.insertMovement(loan)
-
-            // Seed initial transactions for Room Database (Ventas, Compras, Préstamos)
-            transactionDao.insertTransaction(
-                Transaction(
-                    id = sale.id,
-                    groupId = groupId,
-                    type = TransactionType.VENTA,
-                    amount = 5_000_000.0,
-                    description = "Ventas de eventos y salón",
-                    date = sale.occurredAt,
-                    paymentMethod = PaymentMethod.EFECTIVO
-                )
-            )
-            transactionDao.insertTransaction(
-                Transaction(
-                    id = purchase.id,
-                    groupId = groupId,
-                    type = TransactionType.COMPRA,
-                    amount = 2_000_000.0,
-                    description = "Compra de bultos de café verde",
-                    date = purchase.occurredAt,
-                    paymentMethod = PaymentMethod.TRANSFERENCIA
-                )
-            )
-            transactionDao.insertTransaction(
-                Transaction(
-                    id = loan.id,
-                    groupId = groupId,
-                    type = TransactionType.PRESTAMO,
-                    amount = 1_000_000.0,
-                    description = "Retiro para gastos personales",
-                    date = loan.occurredAt,
-                    paymentMethod = PaymentMethod.TRANSFERENCIA,
-                    customerOrDebtor = carlos.name
-                )
-            )
-
-            // Notification for Group 1
-            notificationDao.insertNotification(
-                NotificationItem(
-                    groupId = groupId,
-                    title = "Bienvenido a SocioFinanzas",
-                    message = "Cuentas claras para socios de negocio en pesos colombianos (COP).",
-                    timestamp = now
-                )
-            )
-        }
-
-        // --- Empresa 2: Panadería & Pastelería San Juan ---
-        val group2Id = "group_panaderia_sanjuan"
-        if (groupDao.getGroupById(group2Id) == null || productDao.getProductsByGroup(group2Id).first().isEmpty()) {
-            val group2 = Group(
-                id = group2Id,
-                name = "Panadería & Pastelería San Juan",
-                createdAt = now - 20L * 24 * 3600 * 1000L
-            )
-            groupDao.insertGroup(group2)
-
-            val andres2 = Member(
-                id = "user_andres_admin_g2",
-                groupId = group2Id,
-                name = "Andrés",
-                email = "andres@sanjuan.co",
-                role = Role.ADMIN,
-                active = true,
-                sharePercentCentecimas = 5000,
-                initialDebtCop = 0L
-            )
-            val mateo = Member(
-                id = "user_mateo_socio_g2",
-                groupId = group2Id,
-                name = "Mateo",
-                email = "mateo@sanjuan.co",
-                role = Role.SOCIO,
-                active = true,
-                sharePercentCentecimas = 3000,
-                initialDebtCop = 0L
-            )
-            val lucia = Member(
-                id = "user_lucia_socio_g2",
-                groupId = group2Id,
-                name = "Lucía",
-                email = "lucia@sanjuan.co",
-                role = Role.SOCIO,
-                active = true,
-                sharePercentCentecimas = 2000,
-                initialDebtCop = 0L
-            )
-            memberDao.insertMembers(listOf(andres2, mateo, lucia))
-
-            for (acc in listOf("Bancolombia", "Nequi", "Daviplata", "Caja Efectivo")) {
-                transferAccountDao.insertAccount(TransferAccount(groupId = group2Id, name = acc))
-            }
-
-            val products2 = listOf(
-                Product(id = "p_pan_artesanal", groupId = group2Id, name = "Pan Artesanal de Masa Madre", category = "Panadería", photoUri = "panaderia", standardPriceCop = 6_500L),
-                Product(id = "p_croissant", groupId = group2Id, name = "Croissant de Mantequilla", category = "Panadería", photoUri = "panaderia", standardPriceCop = 5_000L),
-                Product(id = "p_torta_choco", groupId = group2Id, name = "Torta de Chocolate 8 Porciones", category = "Pastelería", photoUri = "postre", standardPriceCop = 42_000L),
-                Product(id = "p_latte", groupId = group2Id, name = "Café Latte Vainilla", category = "Bebidas", photoUri = "cafe", standardPriceCop = 8_500L)
-            )
-            for (p in products2) {
-                productDao.insertProduct(p)
-            }
-
-            val sale2Line = MovementLine("p_pan_artesanal", "Pan Artesanal de Masa Madre", 200, 1_300_000L, 6_500L)
-            val sale2 = Movement(
-                groupId = group2Id,
-                orderCode = "#V-2001",
-                type = MovementType.VENTA,
-                linesJson = JsonHelper.serializeLines(listOf(sale2Line)),
-                totalCop = 1_300_000L,
-                paymentMethod = PaymentMethod.TRANSFERENCIA,
-                transferAccountName = "Bancolombia",
-                occurredAt = now - 3600_000L * 6,
-                recordedAt = now - 3600_000L * 6,
-                registeredByUserId = andres2.id,
-                registeredByName = andres2.name,
-                note = "Despacho a cafeterías aliadas"
-            )
-            movementDao.insertMovement(sale2)
-
-            val purchase2Line = MovementLine("p_harina", "Bulto de Harina de Trigo Especial", 10, 450_000L, 45_000L)
-            val purchase2 = Movement(
-                groupId = group2Id,
-                orderCode = "#C-2002",
-                type = MovementType.COMPRA,
-                linesJson = JsonHelper.serializeLines(listOf(purchase2Line)),
-                totalCop = 450_000L,
-                paymentMethod = PaymentMethod.EFECTIVO,
-                occurredAt = now - 3600_000L * 5,
-                recordedAt = now - 3600_000L * 5,
-                registeredByUserId = andres2.id,
-                registeredByName = andres2.name,
-                note = "Insumos molino central"
-            )
-            movementDao.insertMovement(purchase2)
-
-            val loan2 = Movement(
-                groupId = group2Id,
-                orderCode = "#P-2003",
-                type = MovementType.PRESTAMO,
-                linesJson = "[]",
-                totalCop = 200_000L,
-                paymentMethod = PaymentMethod.TRANSFERENCIA,
-                transferAccountName = "Nequi",
-                occurredAt = now - 3600_000L * 2,
-                recordedAt = now - 3600_000L * 2,
-                registeredByUserId = mateo.id,
-                registeredByName = mateo.name,
-                debtorMemberId = mateo.id,
-                debtorMemberName = mateo.name,
-                note = "Adelanto personal Mateo"
-            )
-            movementDao.insertMovement(loan2)
-
-            transactionDao.insertTransaction(
-                Transaction(
-                    id = sale2.id,
-                    groupId = group2Id,
-                    type = TransactionType.VENTA,
-                    amount = 1_300_000.0,
-                    description = "Despacho a cafeterías aliadas",
-                    date = sale2.occurredAt,
-                    paymentMethod = PaymentMethod.TRANSFERENCIA
-                )
-            )
-            transactionDao.insertTransaction(
-                Transaction(
-                    id = purchase2.id,
-                    groupId = group2Id,
-                    type = TransactionType.COMPRA,
-                    amount = 450_000.0,
-                    description = "Insumos molino central",
-                    date = purchase2.occurredAt,
-                    paymentMethod = PaymentMethod.EFECTIVO
-                )
-            )
-            transactionDao.insertTransaction(
-                Transaction(
-                    id = loan2.id,
-                    groupId = group2Id,
-                    type = TransactionType.PRESTAMO,
-                    amount = 200_000.0,
-                    description = "Adelanto personal Mateo",
-                    date = loan2.occurredAt,
-                    paymentMethod = PaymentMethod.TRANSFERENCIA,
-                    customerOrDebtor = mateo.name
-                )
-            )
-
-            notificationDao.insertNotification(
-                NotificationItem(
-                    groupId = group2Id,
-                    title = "Panadería San Juan lista",
-                    message = "Perfil de empresa activo con su propio catálogo y finanzas.",
-                    timestamp = now
-                )
-            )
-        }
-    }
-
-    suspend fun updateAdminGoogleAccount(groupId: String, googleUid: String, displayName: String, email: String): Member {
+    /**
+     * Vincula una cuenta de Google con el miembro correcto DENTRO de un grupo.
+     *
+     * Reglas (en orden):
+     *  1. Si ya existe un miembro con ese googleUid en el grupo -> ese es el usuario.
+     *  2. Si no, y existe un miembro sin googleUid con el mismo correo -> se vincula.
+     *  3. Si no, y el grupo no tiene ningun Admin -> este usuario pasa a ser Admin.
+     *  4. En cualquier otro caso -> se crea un nuevo SOCIO.
+     *
+     * Nunca sobrescribe el nombre ni el correo de otro miembro.
+     */
+    suspend fun linkGoogleAccountToGroup(
+        groupId: String,
+        googleUid: String,
+        displayName: String,
+        email: String
+    ): Member {
         val members = memberDao.getMembersByGroup(groupId).first()
-        val currentAdmin = members.firstOrNull { it.role == Role.ADMIN }
-        val finalName = if (displayName.isNotBlank()) displayName else (email.substringBefore("@").replaceFirstChar { it.uppercase() })
-        val finalEmail = if (email.isNotBlank()) email else "admin@google.com"
+        val finalName = if (displayName.isNotBlank()) displayName
+            else email.substringBefore("@").replaceFirstChar { it.uppercase() }
+        val finalEmail = email.ifBlank { "usuario@google.com" }
 
-        return if (currentAdmin != null) {
-            val updated = currentAdmin.copy(
-                name = finalName,
-                email = finalEmail
-            )
-            memberDao.updateMember(updated)
-            updated
-        } else {
-            val newMember = Member(
-                id = "user_google_$googleUid",
+        // 1. Ya vinculado por UID
+        members.firstOrNull { it.googleUid.isNotBlank() && it.googleUid == googleUid }
+            ?.let { return it }
+
+        // 2. Mismo correo, aun sin vincular (migracion de datos antiguos)
+        members.firstOrNull { it.googleUid.isBlank()
+            && it.email.isNotBlank()
+            && it.email.equals(email, ignoreCase = true) }
+            ?.let { matched ->
+                val updated = matched.copy(googleUid = googleUid)
+                memberDao.updateMember(updated)
+                return updated
+            }
+
+        // 3. Grupo sin administrador -> el primero en entrar administra
+        if (members.none { it.role == Role.ADMIN }) {
+            val newAdmin = Member(
+                id = "user_" + UUID.randomUUID().toString().take(8),
                 groupId = groupId,
                 name = finalName,
                 email = finalEmail,
                 role = Role.ADMIN,
                 active = true,
-                sharePercentCentecimas = 4000,
-                initialDebtCop = 0L
+                sharePercentCentecimas = 5000,
+                initialDebtCop = 0L,
+                googleUid = googleUid
             )
-            memberDao.insertMember(newMember)
-            newMember
+            memberDao.insertMember(newAdmin)
+            return newAdmin
         }
+
+        // 4. Nuevo socio
+        val newMember = Member(
+            id = "user_" + UUID.randomUUID().toString().take(8),
+            groupId = groupId,
+            name = finalName,
+            email = finalEmail,
+            role = Role.SOCIO,
+            active = true,
+            sharePercentCentecimas = 0,
+            initialDebtCop = 0L,
+            googleUid = googleUid
+        )
+        memberDao.insertMember(newMember)
+        return newMember
+    }
+
+    /**
+     * Resuelve la identidad global de la cuenta de Google (sin grupo asociado).
+     * Devuelve null si el usuario aun no pertenece a ninguna empresa.
+     */
+    suspend fun bindAuthenticatedUser(
+        googleUid: String,
+        displayName: String,
+        email: String
+    ): Member? {
+        // Buscar una fila perfil (groupId vacio) ya creada para este UID
+        val profile = memberDao.getProfileMemberByGoogleUid(googleUid)
+        if (profile != null) return profile
+
+        // Si existe como miembro de algun grupo, ya tiene identidad: no creamos perfil
+        val inGroup = memberDao.getMemberByGoogleUidAnywhere(googleUid)
+        if (inGroup != null) return inGroup
+
+        // Crear fila perfil para que el usuario pueda navegar y crear su empresa
+        val finalName = if (displayName.isNotBlank()) displayName
+            else email.substringBefore("@").replaceFirstChar { it.uppercase() }
+        val created = Member(
+            id = "profile_" + googleUid,
+            groupId = "",
+            name = finalName,
+            email = email.ifBlank { "usuario@google.com" },
+            role = Role.ADMIN,
+            active = true,
+            sharePercentCentecimas = 0,
+            initialDebtCop = 0L,
+            googleUid = googleUid
+        )
+        memberDao.insertMember(created)
+        return created
     }
 }

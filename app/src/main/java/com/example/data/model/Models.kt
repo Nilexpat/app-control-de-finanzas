@@ -66,6 +66,10 @@ data class Member(
     val active: Boolean = true,
     val sharePercentCentecimas: Int = 4000, // 40.00%
     val initialDebtCop: Long = 0L,
+    // UID de la cuenta de Google vinculada a este miembro. Vacio si aun no
+    // ha iniciado sesion. Es lo que permite reconocer al mismo usuario entre
+    // dispositivos sin sobrescribir a otros socios.
+    val googleUid: String = "",
     val notifySales: Boolean = true,
     val notifyLoans: Boolean = true
 )

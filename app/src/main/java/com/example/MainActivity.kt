@@ -63,6 +63,8 @@ class MainActivity : ComponentActivity() {
                     val currentMember by viewModel.currentMember.collectAsStateWithLifecycle()
                     val isAdmin = currentMember?.role == com.example.data.model.Role.ADMIN
 
+                    // Se resuelve la identidad del usuario SIEMPRE al iniciar sesion,
+                    // aunque todavia no tenga ninguna empresa (estado inicial vacio).
                     LaunchedEffect(currentUser) {
                         currentUser?.let { user ->
                             viewModel.setAuthenticatedGoogleUser(user)

@@ -53,6 +53,11 @@ fun GroupScreen(
     var showCompanyPicker by remember { mutableStateOf(false) }
     var showCreateCompanyDialog by remember { mutableStateOf(false) }
     var showRenameCompanyDialog by remember { mutableStateOf(false) }
+    var showDeleteCompanyDialog by remember { mutableStateOf(false) }
+    // Estado del dialogo "unirse con codigo", elevado aqui para poder
+    // pre-rellenar el nombre desde la cuenta de Google autenticada.
+    var inputCode by remember { mutableStateOf("") }
+    var inputName by remember { mutableStateOf("") }
     var selectedMemberForDetail by remember { mutableStateOf<Member?>(null) }
 
     val isAdmin = currentMember?.role == Role.ADMIN
@@ -77,6 +82,16 @@ fun GroupScreen(
                         ) {
                             Icon(Icons.Default.Edit, contentDescription = "Renombrar empresa")
                         }
+                        IconButton(
+                            onClick = { showDeleteCompanyDialog = true },
+                            modifier = Modifier.testTag("delete_group_btn")
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Eliminar empresa",
+                                tint = FinanceRed
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -91,6 +106,47 @@ fun GroupScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Estado inicial: aun no hay ninguna empresa
+            if (groups.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("empty_companies_card"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = BrandLimeLight),
+                        border = BorderStroke(1.dp, BrandLime)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Todavía no tienes ninguna empresa",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = BrandDark
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Crea tu primera empresa para empezar a registrar ventas, " +
+                                    "compras y préstamos. También puedes unirte a la de un socio con un código.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BrandTextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = { showCreateCompanyDialog = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("create_first_company_btn")
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Crear mi primera empresa")
+                            }
+                        }
+                    }
+                }
+            }
+
             // Google Account Card
             item {
                 Card(
@@ -467,7 +523,15 @@ fun GroupScreen(
             // Join with invitation code
             item {
                 OutlinedButton(
-                    onClick = { showJoinDialog = true },
+                    onClick = {
+                        // El nombre se toma de la cuenta de Google ya autenticada
+                        if (inputName.isBlank()) {
+                            inputName = currentMember?.name
+                                ?: currentMember?.email?.substringBefore("@")
+                                ?: ""
+                        }
+                        showJoinDialog = true
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("join_invite_code_btn")
@@ -588,10 +652,6 @@ fun GroupScreen(
 
     // Join with code dialog
     if (showJoinDialog) {
-        var inputCode by remember { mutableStateOf("") }
-        var inputName by remember { mutableStateOf("") }
-        var inputEmail by remember { mutableStateOf("") }
-
         AlertDialog(
             onDismissRequest = { showJoinDialog = false },
             title = { Text("Unirse con Código") },
@@ -608,29 +668,30 @@ fun GroupScreen(
                     OutlinedTextField(
                         value = inputName,
                         onValueChange = { inputName = it },
-                        label = { Text("Tu Nombre Visible *") },
+                        label = { Text("Tu Nombre Visible") },
                         placeholder = { Text("Ej. Daniel") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("join_name_input")
                     )
-                    OutlinedTextField(
-                        value = inputEmail,
-                        onValueChange = { inputEmail = it },
-                        label = { Text("Correo Electrónico *") },
-                        placeholder = { Text("daniel@ejemplo.com") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("join_email_input")
+                    Text(
+                        text = "No hace falta correo: se usará la cuenta de Google con la que has iniciado sesión.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BrandTextSecondary
                     )
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.useInvitation(inputCode, inputName, inputEmail) {
+                        val nombre = inputName.ifBlank {
+                            currentMember?.name ?: currentMember?.email?.substringBefore("@") ?: "Socio"
+                        }
+                        val correo = currentMember?.email ?: ""
+                        viewModel.useInvitation(inputCode, nombre, correo) {
                             showJoinDialog = false
                         }
                     },
-                    enabled = inputCode.isNotBlank() && inputName.isNotBlank() && inputEmail.isNotBlank(),
+                    enabled = inputCode.isNotBlank(),
                     modifier = Modifier.testTag("confirm_join_btn")
                 ) {
                     Text("Unirse al Grupo")
@@ -745,6 +806,38 @@ fun GroupScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showRenameCompanyDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    if (showDeleteCompanyDialog && activeGroup != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteCompanyDialog = false },
+            title = { Text("Eliminar empresa") },
+            text = {
+                Text(
+                    "¿Seguro que quieres eliminar '${activeGroup.name}'?\n\n" +
+                    "Se borrarán TODOS sus datos: movimientos, socios, catálogo, " +
+                    "cuentas y cortes. Esta acción no se puede deshacer."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteGroup(activeGroup.id) {
+                            showDeleteCompanyDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = FinanceRed),
+                    modifier = Modifier.testTag("confirm_delete_group_btn")
+                ) {
+                    Text("Eliminar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteCompanyDialog = false }) {
                     Text("Cancelar")
                 }
             }

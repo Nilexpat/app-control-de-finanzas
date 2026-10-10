@@ -50,16 +50,35 @@ class ExampleRobolectricTest {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val db = com.example.data.db.AppDatabase.getDatabase(context)
     val repo = com.example.data.repository.FinanceRepository(db)
-    repo.seedInitialDataIfEmpty()
+    // La app ya no crea datos de ejemplo: cada prueba crea sus propias empresas.
 
-    val groups = repo.allGroups.first()
-    assertTrue("Should have multiple seeded companies", groups.size >= 2)
+    // Verifica que las empresas de demostracion ya no existen
+    assertTrue(
+      "No debe haber empresas de ejemplo",
+      repo.allGroups.first().none { it.id == "group_cafe_esquina" || it.id == "group_panaderia_sanjuan" }
+    )
 
-    val g1 = groups.firstOrNull { it.id == "group_cafe_esquina" } ?: groups[0]
-    val g2 = groups.firstOrNull { it.id == "group_panaderia_sanjuan" } ?: groups[1]
+    val r1 = repo.createGroup("Cafe La Esquina", "Andres Admin", "andres@laesquina.co")
+    val r2 = repo.createGroup("Panaderia San Juan", "Marta Admin", "marta@sanjuan.co")
+    assertTrue(r1.isSuccess)
+    assertTrue(r2.isSuccess)
+    val g1 = r1.getOrThrow()
+    val g2 = r2.getOrThrow()
     assertNotEquals("Group IDs must be different", g1.id, g2.id)
 
-    // Verify products are strictly separated per company
+    // El creador queda como Admin de su propia empresa
+    val g1Members = repo.getMembers(g1.id).first()
+    assertTrue(
+      "El creador debe ser Admin",
+      g1Members.any { it.role == com.example.data.model.Role.ADMIN }
+    )
+
+    // Productos separados por empresa
+    val p1 = repo.addProduct(g1.id, "Cafe Americano", "Bebidas", "", 4_000L)
+    val p2 = repo.addProduct(g2.id, "Pan Tajado", "Panaderia", "", 6_000L)
+    assertTrue(p1.isSuccess)
+    assertTrue(p2.isSuccess)
+
     val g1Products = repo.getProducts(g1.id).first()
     val g2Products = repo.getProducts(g2.id).first()
     assertTrue("Group 1 must have products", g1Products.isNotEmpty())
@@ -67,15 +86,11 @@ class ExampleRobolectricTest {
     assertTrue("Group 1 products must belong to group 1", g1Products.all { it.groupId == g1.id })
     assertTrue("Group 2 products must belong to group 2", g2Products.all { it.groupId == g2.id })
 
-    // Verify movements are strictly separated per company
-    val g1Movements = repo.getMovements(g1.id).first()
-    val g2Movements = repo.getMovements(g2.id).first()
-    assertTrue("Group 1 must have movements", g1Movements.isNotEmpty())
-    assertTrue("Group 2 must have movements", g2Movements.isNotEmpty())
-    assertTrue("Group 1 movements must belong to group 1", g1Movements.all { it.groupId == g1.id })
-    assertTrue("Group 2 movements must belong to group 2", g2Movements.all { it.groupId == g2.id })
+    // Aislamiento de movimientos: un producto de la empresa 1 no aparece en la 2
+    assertTrue("Cafe Americano no debe estar en la empresa 2", g2Products.none { it.name == "Cafe Americano" })
+    assertTrue("Pan Tajado no debe estar en la empresa 1", g1Products.none { it.name == "Pan Tajado" })
 
-    // Verify new company creation
+    // Verifica creacion de una tercera empresa
     val createResult = repo.createGroup("Restaurante El Portal", "Nicolás Admin", "nicolas@portal.co")
     assertTrue(createResult.isSuccess)
     val newGroup = createResult.getOrThrow()
@@ -94,6 +109,36 @@ class ExampleRobolectricTest {
     assertEquals(1, portalProducts.size)
     assertEquals("Almuerzo Ejecutivo", portalProducts.first().name)
     assertEquals(16_000L, portalProducts.first().standardPriceCop)
+  }
+
+  @Test
+  fun `eliminar empresa borra todos sus datos y permite quedarse sin empresas`() = kotlinx.coroutines.test.runTest {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val db = com.example.data.db.AppDatabase.getDatabase(context)
+    val repo = com.example.data.repository.FinanceRepository(db)
+
+    val r = repo.createGroup("Empresa Temporal", "Temporal Admin", "temp@test.co")
+    assertTrue(r.isSuccess)
+    val group = r.getOrThrow()
+    repo.addProduct(group.id, "Producto Temporal", "General", "", 1_000L)
+
+    val admin = repo.getMembers(group.id).first().first { it.role == com.example.data.model.Role.ADMIN }
+
+    val del = repo.deleteGroup(group.id, admin)
+    assertTrue("Eliminar la empresa debe funcionar", del.isSuccess)
+
+    assertTrue(
+      "La empresa debe desaparecer",
+      repo.allGroups.first().none { it.id == group.id }
+    )
+    assertTrue(
+      "Sus productos deben borrarse con ella",
+      repo.getProducts(group.id).first().isEmpty()
+    )
+    assertTrue(
+      "Sus miembros deben borrarse con ella",
+      repo.getMembers(group.id).first().isEmpty()
+    )
   }
 
   @Test

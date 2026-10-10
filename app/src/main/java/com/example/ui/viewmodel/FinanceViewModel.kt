@@ -136,27 +136,12 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     val draftDebtorMemberId: StateFlow<String?> = _draftDebtorMemberId.asStateFlow()
 
     init {
+        // Al abrir la app no se crea ninguna empresa ni ningun dato de ejemplo.
+        // El usuario empieza con la lista vacia y crea su empresa o se une por codigo.
         viewModelScope.launch {
-            try {
-                repository.seedInitialDataIfEmpty()
-            } catch (e: Throwable) {
-                android.util.Log.e("FinanceViewModel", "Error seeding initial demo data", e)
-            }
             groups.collectLatest { groupList ->
                 if (groupList.isNotEmpty() && _selectedGroupId.value == null) {
                     _selectedGroupId.value = groupList.first().id
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            activeMembers.collect { memberList ->
-                val currentGId = _selectedGroupId.value
-                if (memberList.isNotEmpty() && currentGId != null) {
-                    val current = _currentMember.value
-                    if (current == null || current.groupId != currentGId || memberList.none { it.id == current.id }) {
-                        _currentMember.value = memberList.firstOrNull { it.role == Role.ADMIN } ?: memberList.first()
-                    }
                 }
             }
         }
@@ -168,53 +153,84 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Resuelve la identidad del usuario tras iniciar sesion con Google.
+     *
+     * - Si ya existia una identidad guardada en este dispositivo, se reutiliza.
+     * - Si el usuario pertenece a alguna empresa, se recupera ese miembro.
+     * - Si es nuevo, se crea su identidad (sin grupo) y la app queda vacia,
+     *   lista para crear su primera empresa o unirse con un codigo.
+     */
     fun setAuthenticatedGoogleUser(user: com.google.firebase.auth.FirebaseUser) {
         _authenticatedUser.value = user
         viewModelScope.launch {
             try {
                 firestoreRepository.syncUserProfile(user)
             } catch (e: Exception) {
-                // Ignore transient errors
+                // Ignorar errores transitorios de red
             }
-            val currentGId = _selectedGroupId.value
-            if (currentGId != null) {
-                val adminMember = repository.updateAdminGoogleAccount(
-                    groupId = currentGId,
-                    googleUid = user.uid,
-                    displayName = user.displayName ?: "",
-                    email = user.email ?: ""
-                )
-                _currentMember.value = adminMember
+
+            val uid = user.uid
+            val displayName = user.displayName ?: ""
+            val email = user.email ?: ""
+
+            // Identidad guardada previamente en este dispositivo
+            val storedId = getApplication<Application>()
+                .getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .getString(KEY_CURRENT_MEMBER_ID, null)
+            if (storedId != null) {
+                val stored = repository.getMemberById(storedId)
+                if (stored != null && stored.googleUid == uid) {
+                    _currentMember.value = stored
+                    if (stored.groupId.isNotBlank()) _selectedGroupId.value = stored.groupId
+                    return@launch
+                }
             }
+
+            // Ya es miembro de alguna empresa
+            val existing = repository.getMemberByGoogleUidAnywhere(uid)
+            if (existing != null) {
+                _currentMember.value = existing
+                if (existing.groupId.isNotBlank()) _selectedGroupId.value = existing.groupId
+                persistCurrentMemberId(existing.id)
+                return@launch
+            }
+
+            // Usuario nuevo: identidad sin grupo, app vacia
+            val identity = repository.bindAuthenticatedUser(uid, displayName, email)
+            _currentMember.value = identity
+            persistCurrentMemberId(identity?.id)
         }
+    }
+
+    private fun persistCurrentMemberId(memberId: String?) {
+        getApplication<Application>()
+            .getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_CURRENT_MEMBER_ID, memberId)
+            .apply()
     }
 
     fun selectGroup(groupId: String) {
         _selectedGroupId.value = groupId
         viewModelScope.launch {
-            val user = _authenticatedUser.value
-            if (user != null) {
-                val adminMember = repository.updateAdminGoogleAccount(
-                    groupId = groupId,
-                    googleUid = user.uid,
-                    displayName = user.displayName ?: "",
-                    email = user.email ?: ""
-                )
-                _currentMember.value = adminMember
-            } else {
+            val uid = _authenticatedUser.value?.uid
+            if (uid == null) {
                 _currentMember.value = null
+                return@launch
             }
+            // Solo se vincula si el usuario pertenece a ese grupo; si es nuevo
+            // se crea como SOCIO (nunca sobrescribe al administrador existente).
+            val member = repository.linkGoogleAccountToGroup(groupId, uid, "", "")
+            _currentMember.value = member
+            persistCurrentMemberId(member.id)
         }
     }
 
     fun switchCurrentMember(member: Member) {
-        val googleUser = _authenticatedUser.value
-        if (googleUser != null && member.role != Role.ADMIN) {
-            showMessage("Detalles de socio: ${member.name}. Tu sesión está activa como Administrador (${googleUser.email}).")
-        } else {
-            _currentMember.value = member
-            showMessage("Usuario actual: ${member.name}")
-        }
+        _currentMember.value = member
+        persistCurrentMemberId(member.id)
+        showMessage("Usuario actual: ${member.name}")
     }
 
     fun selectMonth(monthKey: String) {
@@ -517,10 +533,15 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     fun createGroup(name: String, creatorName: String, creatorEmail: String, settlementMode: String = "DESEMBOLSO", onDone: (Group) -> Unit) {
         viewModelScope.launch {
-            val result = repository.createGroup(name, creatorName, creatorEmail, settlementMode)
+            val uid = _authenticatedUser.value?.uid ?: ""
+            val result = repository.createGroup(name, creatorName, creatorEmail, settlementMode, uid)
             result.onSuccess { newGroup ->
                 _selectedGroupId.value = newGroup.id
-                _currentMember.value = null
+                // El creador queda vinculado como Admin de la nueva empresa
+                val creator = repository.getMemberByGoogleUidInGroup(uid, newGroup.id)
+                    ?: repository.linkGoogleAccountToGroup(newGroup.id, uid, creatorName, creatorEmail)
+                _currentMember.value = creator
+                persistCurrentMemberId(creator.id)
                 showMessage("Empresa '${newGroup.name}' creada exitosamente")
                 onDone(newGroup)
             }.onFailure { err ->
@@ -544,6 +565,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteGroup(groupId: String, onSuccess: () -> Unit = {}) {
         val user = _currentMember.value ?: return
+        if (user.role != Role.ADMIN) {
+            showMessage("Solo el administrador puede eliminar la empresa", isError = true)
+            return
+        }
         viewModelScope.launch {
             val result = repository.deleteGroup(groupId, user)
             result.onSuccess {
@@ -551,6 +576,14 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 val remaining = groups.value.filter { it.id != groupId }
                 if (remaining.isNotEmpty()) {
                     selectGroup(remaining.first().id)
+                } else {
+                    // Ya no queda ninguna empresa: la app vuelve al estado inicial
+                    _selectedGroupId.value = null
+                    // Se recupera la identidad de la cuenta (sin grupo asociado)
+                    val uid = _authenticatedUser.value?.uid
+                    if (uid != null) {
+                        _currentMember.value = repository.bindAuthenticatedUser(uid, user.name, user.email)
+                    }
                 }
                 onSuccess()
             }.onFailure { err ->
@@ -591,9 +624,13 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     fun useInvitation(code: String, name: String, email: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
-            val result = repository.useInvitation(code, name, email)
-            result.onSuccess {
-                showMessage("¡Bienvenido al grupo, ${it.name}!")
+            val uid = _authenticatedUser.value?.uid ?: ""
+            val result = repository.useInvitation(code, name, email, uid)
+            result.onSuccess { newMember ->
+                _selectedGroupId.value = newMember.groupId
+                _currentMember.value = newMember
+                persistCurrentMemberId(newMember.id)
+                showMessage("¡Bienvenido al grupo, ${newMember.name}!")
                 onSuccess()
             }.onFailure { err ->
                 showMessage(err.message ?: "Error con la invitación", isError = true)
@@ -687,5 +724,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         val summary = _settlementSummary.value ?: return
         val text = ExportHelper.generateWhatsAppSummary(gName, summary)
         onReady(text)
+    }
+
+    companion object {
+        private const val PREFS_NAME = "sociofinanzas_prefs"
+        private const val KEY_CURRENT_MEMBER_ID = "current_member_id"
     }
 }

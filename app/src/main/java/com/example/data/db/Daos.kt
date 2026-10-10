@@ -48,6 +48,9 @@ interface GroupDao {
 
     @Query("DELETE FROM notifications WHERE groupId = :groupId")
     suspend fun deleteNotificationsByGroup(groupId: String)
+
+    @Query("DELETE FROM movement_audits WHERE movementId IN (SELECT id FROM movements WHERE groupId = :groupId)")
+    suspend fun deleteMovementAuditsByGroup(groupId: String)
 }
 
 @Dao
@@ -60,6 +63,18 @@ interface MemberDao {
 
     @Query("SELECT * FROM members WHERE id = :memberId LIMIT 1")
     suspend fun getMemberById(memberId: String): Member?
+
+    @Query("SELECT * FROM members WHERE googleUid = :googleUid AND groupId = '' LIMIT 1")
+    suspend fun getProfileMemberByGoogleUid(googleUid: String): Member?
+
+    @Query("SELECT * FROM members WHERE googleUid = :googleUid LIMIT 1")
+    suspend fun getMemberByGoogleUidAnywhere(googleUid: String): Member?
+
+    @Query("SELECT * FROM members WHERE googleUid = :googleUid AND groupId = :groupId LIMIT 1")
+    suspend fun getMemberByGoogleUidInGroup(googleUid: String, groupId: String): Member?
+
+    @Query("SELECT COUNT(*) FROM members WHERE googleUid = :googleUid AND groupId = :groupId")
+    suspend fun countMembersWithGoogleUidInGroup(googleUid: String, groupId: String): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMember(member: Member)
