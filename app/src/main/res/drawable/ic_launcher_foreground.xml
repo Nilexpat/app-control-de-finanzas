@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="54">
+        <!-- Outer Coin Rim / Circle -->
+        <path
+            android:fillColor="#FBBF24"
+            android:pathData="M54,26 C38.54,26 26,38.54 26,54 C26,69.46 38.54,82 54,82 C69.46,82 82,69.46 82,54 C82,38.54 69.46,26 54,26 Z M54,76 C41.85,76 32,66.15 32,54 C32,41.85 41.85,32 54,32 C66.15,32 76,41.85 76,54 C76,66.15 66.15,76 54,76 Z" />
+        
+        <!-- Two Partners / Handshake Silhouette -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M43,45 C45.2,45 47,43.2 47,41 C47,38.8 45.2,37 43,37 C40.8,37 39,38.8 39,41 C39,43.2 40.8,45 43,45 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M65,45 C67.2,45 69,43.2 69,41 C69,38.8 67.2,37 65,37 C62.8,37 61,38.8 61,41 C61,43.2 62.8,45 65,45 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M43,48 C39.5,48 35,49.8 35,53 L35,55 L51,55 L51,53 C51,49.8 46.5,48 43,48 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M65,48 C61.5,48 57,49.8 57,53 L57,55 L73,55 L73,53 C73,49.8 68.5,48 65,48 Z" />
+
+        <!-- Bold Peso / Finance Exchange Symbol In Center Bottom -->
+        <path
+            android:fillColor="#34D399"
+            android:pathData="M52,57 L56,57 L56,59 L52,59 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M52,60 L54,60 L54,73 L52,73 Z M55,60 L57,60 L57,73 L55,73 Z" />
+        <path
+            android:fillColor="#FBBF24"
+            android:pathData="M49,63 C49,61 51,59 54,59 C57,59 59,61 59,63 L56,63 C56,62 55,61.5 54,61.5 C53,61.5 52,62 52,63 C52,64.5 59,64 59,68 C59,71 56.5,72 54,72 C51,72 49,70.5 49,68 L52,68 C52,69.5 53,70 54,70 C55.5,70 56,69.5 56,68 C56,66 49,65.5 49,63 Z" />
+    </group>
+</vector>

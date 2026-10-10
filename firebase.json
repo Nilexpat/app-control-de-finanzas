@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-android-sociofin-f5c4d9c9-4d8d-45b8-8b46-ebee3a314cda",
+      "rules": "firestore.rules"
+    }
+  ]
+}

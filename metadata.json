@@ -1,0 +1,6 @@
+{
+  "name": "SocioFinanzas",
+  "description": "App de finanzas compartidas para socios de negocios con ventas, compras, préstamos, cortes y reparto mensual.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
