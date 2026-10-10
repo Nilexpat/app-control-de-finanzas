@@ -73,9 +73,6 @@ interface MemberDao {
     @Query("SELECT * FROM members WHERE googleUid = :googleUid AND groupId = :groupId LIMIT 1")
     suspend fun getMemberByGoogleUidInGroup(googleUid: String, groupId: String): Member?
 
-    @Query("SELECT COUNT(*) FROM members WHERE googleUid = :googleUid AND groupId = :groupId")
-    suspend fun countMembersWithGoogleUidInGroup(googleUid: String, groupId: String): Int
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMember(member: Member)
 
