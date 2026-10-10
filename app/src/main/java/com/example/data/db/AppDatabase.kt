@@ -25,6 +25,8 @@ import com.example.data.model.Transaction
     version = 6,
     exportSchema = false
 )
+// Necesario para que Room sepa guardar la List<String> de Group.memberUids
+@androidx.room.TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun groupDao(): GroupDao
     abstract fun memberDao(): MemberDao
