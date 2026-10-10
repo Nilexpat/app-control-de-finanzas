@@ -55,6 +55,7 @@ fun GroupScreen(
     var showRenameCompanyDialog by remember { mutableStateOf(false) }
     var showDeleteCompanyDialog by remember { mutableStateOf(false) }
     var showLeaveGroupDialog by remember { mutableStateOf(false) }
+    var memberToRemove by remember { mutableStateOf<Member?>(null) }
     // Estado del dialogo "unirse con codigo", elevado aqui para poder
     // pre-rellenar el nombre desde la cuenta de Google autenticada.
     var inputCode by remember { mutableStateOf("") }
@@ -941,6 +942,62 @@ fun GroupScreen(
                         fontWeight = FontWeight.Bold,
                         color = if (netBalance >= 0) Color(0xFF166534) else FinanceRed
                     )
+
+                    // Acciones de administracion sobre este socio.
+                    // Solo el Admin, y nunca sobre su propia ficha.
+                    if (isAdmin && member.id != currentMember?.id && member.active) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                        Text(
+                            text = "Administrar socio",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = BrandTextSecondary
+                        )
+
+                        // Cambiar entre Admin y Socio
+                        OutlinedButton(
+                            onClick = {
+                                val nuevoRol = if (member.role == Role.ADMIN) Role.SOCIO else Role.ADMIN
+                                viewModel.updateMemberRole(member.id, nuevoRol)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("toggle_member_role_btn")
+                        ) {
+                            Icon(
+                                if (member.role == Role.ADMIN) Icons.Default.PersonOutline else Icons.Default.AdminPanelSettings,
+                                contentDescription = null
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                if (member.role == Role.ADMIN) "Quitar privilegios de Admin"
+                                else "Nombrar administrador"
+                            )
+                        }
+
+                        // Desvincular del grupo conservando su historial
+                        OutlinedButton(
+                            onClick = {
+                                selectedMemberForDetail = null
+                                memberToRemove = member
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = FinanceRed),
+                            border = BorderStroke(1.dp, FinanceRed.copy(alpha = 0.5f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("remove_member_btn")
+                        ) {
+                            Icon(Icons.Default.PersonRemove, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Desvincular de la empresa")
+                        }
+
+                        Text(
+                            text = "Al desvincular, el socio pierde el acceso pero su historial de " +
+                                "movimientos se conserva como evidencia.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BrandTextSecondary
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -949,6 +1006,39 @@ fun GroupScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = BrandDark, contentColor = Color.White)
                 ) {
                     Text("Cerrar")
+                }
+            }
+        )
+    }
+
+    // Confirmacion de desvinculacion de un socio
+    memberToRemove?.let { objetivo ->
+        AlertDialog(
+            onDismissRequest = { memberToRemove = null },
+            title = { Text("Desvincular socio") },
+            text = {
+                Text(
+                    "¿Seguro que quieres desvincular a '${objetivo.name}' de esta empresa?\n\n" +
+                    "Perderá el acceso y dejará de ver la empresa en su móvil, pero TODOS " +
+                    "sus movimientos se conservarán como evidencia y seguirán apareciendo " +
+                    "en los cortes y en el reparto."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deactivateMember(objetivo.id)
+                        memberToRemove = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = FinanceRed),
+                    modifier = Modifier.testTag("confirm_remove_member_btn")
+                ) {
+                    Text("Desvincular")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { memberToRemove = null }) {
+                    Text("Cancelar")
                 }
             }
         )
