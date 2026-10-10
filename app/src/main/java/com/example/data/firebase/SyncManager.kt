@@ -50,6 +50,13 @@ class SyncManager(
     /** Ids que acaban de llegar de la nube y no deben reenviarse. */
     private val remoteApplied = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
+    /**
+     * Grupos a los que ya estamos suscritos. Evita volver a descargar y a
+     * enganchar escuchas duplicadas, pero garantiza que un grupo NUEVO
+     * (por ejemplo tras aceptar una invitacion) se descargue entero.
+     */
+    private val watching = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
     private var started = false
 
     /**
@@ -68,11 +75,13 @@ class SyncManager(
                 Log.w(TAG, "start: ${e.message}")
             }
 
-            // Descubrir grupos nuevos (por ejemplo tras aceptar una invitacion)
+            // Descubrir grupos nuevos (por ejemplo tras aceptar una invitacion).
+            // Se comprueba `watching` y no la base local: al unirse por codigo ya
+            // puede existir una ficha de miembro sin que el grupo este descargado.
             listeners += firestore.listenUserGroups(userId) { ids ->
                 scope.launch {
                     ids.forEach { id ->
-                        if (db.groupDao().getGroupById(id) == null) pullGroup(id)
+                        if (!watching.contains(id)) pullGroup(id)
                     }
                 }
             }
@@ -82,15 +91,23 @@ class SyncManager(
     fun stop() {
         listeners.forEach { runCatching { it.remove() } }
         listeners.clear()
+        watching.clear()
         started = false
     }
 
-    /** Descarga un grupo completo y lo guarda en Room. */
+    /** Descarga un grupo completo y lo guarda en Room. Es idempotente. */
     suspend fun pullGroup(groupId: String) {
+        // Evita descargas y escuchas duplicadas si varios avisos coinciden
+        if (!watching.add(groupId)) return
         try {
-            val group = firestore.fetchGroup(groupId).getOrNull() ?: return
+            val group = firestore.fetchGroup(groupId).getOrNull()
+            if (group == null) {
+                // El grupo aun no esta en la nube: se reintentara en el proximo aviso
+                watching.remove(groupId)
+                Log.w(TAG, "pullGroup($groupId): el grupo no existe todavia en la nube")
+                return
+            }
             db.groupDao().insertGroup(group)
-            db.groupDao().getGroupById(groupId)?.let { }
 
             firestore.fetchMembers(groupId).getOrNull()?.forEach { m ->
                 remoteApplied.add(m.id)
@@ -113,7 +130,9 @@ class SyncManager(
                 db.settlementDao().insertSettlement(s)
             }
             attachListeners(groupId)
+            Log.d(TAG, "pullGroup($groupId): descarga completa")
         } catch (e: Exception) {
+            watching.remove(groupId)
             Log.w(TAG, "pullGroup($groupId): ${e.message}")
         }
     }
