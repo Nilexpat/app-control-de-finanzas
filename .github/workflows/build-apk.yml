@@ -56,17 +56,30 @@ jobs:
       - name: Compilar el APK de debug
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
-          keytool -genkeypair -v \
-            -keystore "${GITHUB_WORKSPACE}/debug.keystore" \
-            -storetype JKS \
-            -storepass android \
-            -keypass android \
-            -alias androiddebugkey \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 -d > "${GITHUB_WORKSPACE}/debug.keystore"
+            echo "Keystore fijo restaurado desde el secreto (SHA-1 estable)."
+          else
+            keytool -genkeypair -v \
+              -keystore "${GITHUB_WORKSPACE}/debug.keystore" \
+              -storetype JKS \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "AVISO: keystore efimero generado. Su SHA-1 cambia en cada build,"
+            echo "por lo que Google Sign-In fallara hasta que definas el secreto"
+            echo "DEBUG_KEYSTORE_BASE64."
+          fi
+
+          echo "=== SHA-1 del keystore usado en este build ==="
+          keytool -list -v -keystore "${GITHUB_WORKSPACE}/debug.keystore" \
+            -storepass android -alias androiddebugkey 2>/dev/null | grep -E "SHA1|SHA-1" || true
 
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
