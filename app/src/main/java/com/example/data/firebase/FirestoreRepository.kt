@@ -44,11 +44,34 @@ class FirestoreRepository(
         context: android.content.Context,
         authProvider: () -> FirebaseUser?
     ) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        ),
+        firestoreFor(context),
         authProvider
     )
+
+    companion object {
+        private const val TAG = "FirestoreRepository"
+
+        /**
+         * Obtiene la instancia de Firestore segun el id configurado en
+         * `firebase_applet_config.xml`.
+         *
+         * El proyecto original de Google AI Studio usa una base de datos con
+         * nombre personalizado. Un proyecto de Firebase propio solo tiene la
+         * base `(default)`. Para no tener que tocar codigo al cambiar de
+         * proyecto, aqui se aceptan los valores "(default)" y "" como peticion
+         * de usar la base por defecto.
+         */
+        private fun firestoreFor(context: android.content.Context): FirebaseFirestore {
+            val configured = context.applicationContext
+                .getString(R.string.firestore_database_id)
+                .trim()
+            return if (configured.isEmpty() || configured.equals("(default)", ignoreCase = true)) {
+                FirebaseFirestore.getInstance()
+            } else {
+                FirebaseFirestore.getInstance(configured)
+            }
+        }
+    }
 
     private val groupsCol = db.collection("groups")
     private val invitationsCol = db.collection("invitations")
@@ -251,8 +274,4 @@ class FirestoreRepository(
                 if (snapshot == null) return@addSnapshotListener
                 onChange(snapshot.documents.mapNotNull { it.data?.toInvitation() })
             }
-
-    companion object {
-        private const val TAG = "FirestoreRepository"
-    }
 }
