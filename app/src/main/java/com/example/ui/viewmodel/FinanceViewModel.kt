@@ -27,7 +27,13 @@ data class UiNotificationMessage(
 class FinanceViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = FinanceRepository(AppDatabase.getDatabase(application))
-    private val firestoreRepository = com.example.data.firebase.FirestoreRepository(application)
+    private val firestoreRepository = com.example.data.firebase.FirestoreRepository(
+        application,
+        { _authenticatedUser.value }
+    )
+
+    /** Sincronizacion con la nube. Se inicializa en el bloque init. */
+    private var syncManager: com.example.data.firebase.SyncManager? = null
 
     private val _authenticatedUser = MutableStateFlow<com.google.firebase.auth.FirebaseUser?>(null)
     val authenticatedUser: StateFlow<com.google.firebase.auth.FirebaseUser?> = _authenticatedUser.asStateFlow()
@@ -138,6 +144,34 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     init {
         // Al abrir la app no se crea ninguna empresa ni ningun dato de ejemplo.
         // El usuario empieza con la lista vacia y crea su empresa o se une por codigo.
+
+        // Sincronizacion con la nube: se inicializa aqui para que pueda leer
+        // _authenticatedUser y para engancharse a los eventos de escritura local.
+        syncManager = com.example.data.firebase.SyncManager(
+            context = getApplication(),
+            db = AppDatabase.getDatabase(getApplication()),
+            firestore = firestoreRepository,
+            currentUserIdProvider = { _authenticatedUser.value?.uid }
+        )
+        val sync = syncManager
+        if (sync != null) {
+            repository.setPersistenceListener(object : FinanceRepository.PersistenceListener {
+                override fun onGroupInserted(group: Group) = sync.pushGroup(group)
+                override fun onMemberInserted(member: Member) = sync.pushMember(member)
+                override fun onMovementInserted(movement: Movement) = sync.pushMovement(movement)
+                override fun onProductInserted(product: Product) = sync.pushProduct(product)
+                override fun onTransferAccountInserted(account: TransferAccount) = sync.pushTransferAccount(account)
+                override fun onInvitationInserted(invitation: Invitation) = sync.pushInvitation(invitation)
+                override fun onSettlementInserted(settlement: Settlement) = sync.pushSettlement(settlement)
+            })
+        }
+
+        // Permite que el codigo de invitacion se resuelva contra la nube cuando
+        // no existe en la base local (el caso de unirse desde OTRO dispositivo).
+        repository.cloudInvitationLookup = { code ->
+            firestoreRepository.findInvitationByCode(code).getOrNull()
+        }
+
         viewModelScope.launch {
             groups.collectLatest { groupList ->
                 if (groupList.isNotEmpty() && _selectedGroupId.value == null) {
@@ -173,6 +207,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             val uid = user.uid
             val displayName = user.displayName ?: ""
             val email = user.email ?: ""
+
+            // Arrancar la sincronizacion con la nube para esta cuenta
+            syncManager?.start(uid)
 
             // Identidad guardada previamente en este dispositivo
             val storedId = getApplication<Application>()

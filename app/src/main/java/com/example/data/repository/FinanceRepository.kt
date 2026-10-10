@@ -12,6 +12,55 @@ import java.util.UUID
 
 class FinanceRepository(private val db: AppDatabase) {
 
+    /**
+     * Eventos de escritura local. La capa de sincronizacion (SyncManager) se
+     * suscribe aqui para enviar a Firestore lo que se acaba de guardar en Room.
+     * Room sigue siendo la fuente de verdad: si no hay red, Firestore encola.
+     */
+    interface PersistenceListener {
+        fun onGroupInserted(group: Group)
+        fun onMemberInserted(member: Member)
+        fun onMovementInserted(movement: Movement)
+        fun onProductInserted(product: Product)
+        fun onTransferAccountInserted(account: TransferAccount)
+        fun onInvitationInserted(invitation: Invitation)
+        fun onSettlementInserted(settlement: Settlement)
+    }
+
+    private var persistenceListener: PersistenceListener? = null
+
+    fun setPersistenceListener(listener: PersistenceListener?) {
+        persistenceListener = listener
+    }
+
+    private fun notifyMovement(movement: Movement) {
+        runCatching { persistenceListener?.onMovementInserted(movement) }
+    }
+
+    private fun notifyMember(member: Member) {
+        runCatching { persistenceListener?.onMemberInserted(member) }
+    }
+
+    private fun notifyGroup(group: Group) {
+        runCatching { persistenceListener?.onGroupInserted(group) }
+    }
+
+    private fun notifyProduct(product: Product) {
+        runCatching { persistenceListener?.onProductInserted(product) }
+    }
+
+    private fun notifyTransferAccount(account: TransferAccount) {
+        runCatching { persistenceListener?.onTransferAccountInserted(account) }
+    }
+
+    private fun notifyInvitation(invitation: Invitation) {
+        runCatching { persistenceListener?.onInvitationInserted(invitation) }
+    }
+
+    private fun notifySettlement(settlement: Settlement) {
+        runCatching { persistenceListener?.onSettlementInserted(settlement) }
+    }
+
     private val groupDao = db.groupDao()
     private val memberDao = db.memberDao()
     private val productDao = db.productDao()
@@ -141,6 +190,7 @@ class FinanceRepository(private val db: AppDatabase) {
         )
 
         movementDao.insertMovement(movement)
+        notifyMovement(movement)
 
         // Store corresponding Transaction entity for sales, purchases, and loans
         val transType = when (type) {
@@ -485,6 +535,7 @@ class FinanceRepository(private val db: AppDatabase) {
         )
 
         settlementDao.insertSettlement(settlement)
+        notifySettlement(settlement)
 
         val notif = NotificationItem(
             groupId = groupId,
@@ -520,6 +571,7 @@ class FinanceRepository(private val db: AppDatabase) {
             frozenSnapshotJson = null
         )
         settlementDao.updateSettlement(updated)
+        notifySettlement(updated)
 
         val notif = NotificationItem(
             groupId = groupId,
@@ -581,6 +633,7 @@ class FinanceRepository(private val db: AppDatabase) {
             periodEndAt = now
         )
         settlementDao.insertSettlement(settlement)
+        notifySettlement(settlement)
 
         // Mark group last disbursement
         groupDao.updateLastDisbursementAt(groupId, now)
@@ -701,6 +754,7 @@ class FinanceRepository(private val db: AppDatabase) {
             isArchived = false
         )
         productDao.insertProduct(product)
+        notifyProduct(product)
         return Result.success(product)
     }
 
@@ -727,6 +781,7 @@ class FinanceRepository(private val db: AppDatabase) {
             currentPeriodStartAt = now
         )
         groupDao.insertGroup(group)
+        notifyGroup(group)
 
         // Creator is Admin
         val adminMember = Member(
@@ -741,11 +796,13 @@ class FinanceRepository(private val db: AppDatabase) {
             googleUid = creatorGoogleUid
         )
         memberDao.insertMember(adminMember)
+        notifyMember(adminMember)
 
         // Add standard transfer accounts
         val defaultAccounts = listOf("Nequi", "Daviplata", "Bancolombia", "Otra")
         for (acc in defaultAccounts) {
             transferAccountDao.insertAccount(TransferAccount(groupId = newGroupId, name = acc))
+            notifyTransferAccount(TransferAccount(groupId = newGroupId, name = acc))
         }
 
         // Notification
@@ -861,6 +918,7 @@ class FinanceRepository(private val db: AppDatabase) {
             isRevoked = false
         )
         invitationDao.insertInvitation(invitation)
+        notifyInvitation(invitation)
         return Result.success(invitation)
     }
 
@@ -876,14 +934,43 @@ class FinanceRepository(private val db: AppDatabase) {
     suspend fun getMemberByGoogleUidInGroup(googleUid: String, groupId: String): Member? =
         memberDao.getMemberByGoogleUidInGroup(googleUid, groupId)
 
+    /**
+     * Busca una invitacion en la nube. Lo inyecta la capa de sincronizacion:
+     * el repositorio no conoce Firestore. Esto es lo que permite unirse a un
+     * grupo desde OTRO dispositivo, donde la invitacion no existe en local.
+     */
+    var cloudInvitationLookup: (suspend (String) -> Invitation?)? = null
+
     suspend fun useInvitation(
         code: String,
         userName: String,
         userEmail: String,
         googleUid: String = ""
     ): Result<Member> {
-        val inv = invitationDao.getInvitationByCode(code.trim().uppercase())
-            ?: return Result.failure(IllegalArgumentException("Código de invitación no válido"))
+        val normalized = code.trim().uppercase()
+
+        // 1. Buscar en la base local (mismo dispositivo)
+        var inv = invitationDao.getInvitationByCode(normalized)
+
+        // 2. Si no esta, buscarla en la nube (otro dispositivo la creo)
+        if (inv == null) {
+            val remote = runCatching { cloudInvitationLookup?.invoke(normalized) }.getOrNull()
+            if (remote != null) {
+                // Se guarda en local para poder validarla y consumirla con el
+                // mismo flujo que una invitacion nativa
+                invitationDao.insertInvitation(remote)
+                inv = remote
+            }
+        }
+
+        if (inv == null) {
+            return Result.failure(
+                IllegalArgumentException(
+                    "Código de invitación no válido o no encontrado. " +
+                    "Comprueba que lo has copiado bien y que tienes conexión."
+                )
+            )
+        }
 
         if (inv.isRevoked) {
             return Result.failure(IllegalStateException("Esta invitación ha sido revocada"))
@@ -900,14 +987,31 @@ class FinanceRepository(private val db: AppDatabase) {
             memberDao.getMemberByGoogleUidInGroup(googleUid, inv.groupId)?.let { return Result.success(it) }
         }
 
-        // El nombre es opcional: si no se indica, se usa el correo o un generico
+        val newMember = buildInvitedMember(inv, userName, userEmail, googleUid)
+        memberDao.insertMember(newMember)
+        notifyMember(newMember)
+
+        // Consumir la invitacion en local y en la nube
+        val updatedInvitation = inv.copy(usedCount = inv.usedCount + 1)
+        invitationDao.updateInvitation(updatedInvitation)
+        notifyInvitation(updatedInvitation)
+
+        return Result.success(newMember)
+    }
+
+    /** Construye la ficha del nuevo socio a partir de una invitacion valida. */
+    private fun buildInvitedMember(
+        inv: Invitation,
+        userName: String,
+        userEmail: String,
+        googleUid: String
+    ): Member {
         val resolvedName = userName.ifBlank {
             userEmail.substringBefore("@").ifBlank { "Socio" }
                 .replaceFirstChar { it.uppercase() }
         }
         val resolvedEmail = userEmail.ifBlank { "socio@google.com" }
-
-        val newMember = Member(
+        return Member(
             groupId = inv.groupId,
             name = resolvedName,
             email = resolvedEmail,
@@ -916,10 +1020,6 @@ class FinanceRepository(private val db: AppDatabase) {
             sharePercentCentecimas = 2000, // 20% por defecto
             googleUid = googleUid
         )
-        memberDao.insertMember(newMember)
-
-        invitationDao.updateInvitation(inv.copy(usedCount = inv.usedCount + 1))
-        return Result.success(newMember)
     }
 
     private fun generateInviteCode(): String {
@@ -936,6 +1036,7 @@ class FinanceRepository(private val db: AppDatabase) {
         }
         val acc = TransferAccount(groupId = groupId, name = name.trim())
         transferAccountDao.insertAccount(acc)
+        notifyTransferAccount(acc)
         return Result.success(acc)
     }
 
@@ -990,6 +1091,7 @@ class FinanceRepository(private val db: AppDatabase) {
                 googleUid = googleUid
             )
             memberDao.insertMember(newAdmin)
+            notifyMember(newAdmin)
             return newAdmin
         }
 
@@ -1006,6 +1108,7 @@ class FinanceRepository(private val db: AppDatabase) {
             googleUid = googleUid
         )
         memberDao.insertMember(newMember)
+        notifyMember(newMember)
         return newMember
     }
 
@@ -1041,6 +1144,7 @@ class FinanceRepository(private val db: AppDatabase) {
             googleUid = googleUid
         )
         memberDao.insertMember(created)
+        notifyMember(created)
         return created
     }
 }
