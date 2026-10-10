@@ -775,16 +775,20 @@ class FinanceRepository(private val db: AppDatabase) {
         }
         val newGroupId = "group_" + UUID.randomUUID().toString().take(8)
         val now = System.currentTimeMillis()
-        val group = Group(
+        // El creador queda registrado como miembro con acceso DESDE EL PRINCIPIO.
+        // Si se anadiera despues, el filtro de privacidad ocultaria la empresa
+        // durante ese instante y pareceria que no se ha creado.
+        val grupoConMiembros = Group(
             id = newGroupId,
             name = name.trim(),
             createdAt = now,
             settlementMode = settlementMode,
             lastDisbursementAt = 0L,
-            currentPeriodStartAt = now
+            currentPeriodStartAt = now,
+            memberUids = if (creatorGoogleUid.isNotBlank()) listOf(creatorGoogleUid) else emptyList()
         )
-        groupDao.insertGroup(group)
-        notifyGroup(group)
+        groupDao.insertGroup(grupoConMiembros)
+        notifyGroup(grupoConMiembros)
 
         // Creator is Admin
         val adminMember = Member(
@@ -799,15 +803,14 @@ class FinanceRepository(private val db: AppDatabase) {
             googleUid = creatorGoogleUid
         )
         memberDao.insertMember(adminMember)
+        notifyMember(adminMember)
 
-        // Registrar en la propia empresa quien tiene acceso: el creador.
+        // Sincronizar la lista de acceso en la nube
         if (creatorGoogleUid.isNotBlank()) {
-            groupDao.insertGroup(group.copy(memberUids = listOf(creatorGoogleUid)))
             runCatching {
                 persistenceListener?.onMembershipChanged(newGroupId, listOf(creatorGoogleUid))
             }
         }
-        notifyMember(adminMember)
 
         // Add standard transfer accounts
         val defaultAccounts = listOf("Nequi", "Daviplata", "Bancolombia", "Otra")
@@ -826,7 +829,7 @@ class FinanceRepository(private val db: AppDatabase) {
             )
         )
 
-        return Result.success(group)
+        return Result.success(grupoConMiembros)
     }
 
     suspend fun renameGroup(groupId: String, newName: String, currentUser: Member): Result<Unit> {

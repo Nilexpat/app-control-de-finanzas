@@ -68,7 +68,13 @@ internal fun Map<String, Any?>.toGroup(): Group = Group(
     currency = str("currency", "COP"),
     settlementMode = str("settlementMode", "DESEMBOLSO"),
     lastDisbursementAt = long("lastDisbursementAt"),
-    currentPeriodStartAt = long("currentPeriodStartAt")
+    currentPeriodStartAt = long("currentPeriodStartAt"),
+    // IMPRESCINDIBLE: si no se lee aqui, el grupo llega sin miembros, el filtro
+    // de privacidad lo oculta y la empresa desaparece de la aplicacion.
+    memberUids = (this["memberUids"] as? List<*>)
+        ?.filterIsInstance<String>()
+        ?.filter { it.isNotBlank() }
+        ?: emptyList()
 )
 
 // --- Member ---
