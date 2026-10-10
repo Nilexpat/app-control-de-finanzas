@@ -45,7 +45,11 @@ class SyncManager(
     private val currentUserIdProvider: () -> String?
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val listeners = mutableListOf<ListenerRegistration>()
+
+    // Escuchas agrupadas por empresa, para poder quitar solo las de una empresa
+    // concreta cuando alguien la abandona o le retiran el acceso.
+    private val listenersPorGrupo = mutableMapOf<String, MutableList<ListenerRegistration>>()
+    private val listenersGlobales = mutableListOf<ListenerRegistration>()
 
     /**
      * Ultimo fallo de sincronizacion, para poder mostrarlo en la app.
@@ -122,7 +126,7 @@ class SyncManager(
             // Descubrir grupos nuevos (por ejemplo tras aceptar una invitacion).
             // Se comprueba `watching` y no la base local: al unirse por codigo ya
             // puede existir una ficha de miembro sin que el grupo este descargado.
-            listeners += firestore.listenUserGroups(userId) { ids ->
+            listenersGlobales += firestore.listenUserGroups(userId) { ids ->
                 scope.launch {
                     ids.forEach { id ->
                         if (!watching.contains(id)) pullGroup(id)
@@ -133,8 +137,10 @@ class SyncManager(
     }
 
     fun stop() {
-        listeners.forEach { runCatching { it.remove() } }
-        listeners.clear()
+        listenersPorGrupo.values.flatten().forEach { runCatching { it.remove() } }
+        listenersPorGrupo.clear()
+        listenersGlobales.forEach { runCatching { it.remove() } }
+        listenersGlobales.clear()
         watching.clear()
         started = false
     }
@@ -192,12 +198,12 @@ class SyncManager(
     }
 
     private fun attachListeners(groupId: String) {
-        listeners += firestore.listenGroup(groupId) { data ->
+        listenersPorGrupo.getOrPut(groupId) { mutableListOf() } += firestore.listenGroup(groupId) { data ->
             scope.launch {
                 runCatching { db.groupDao().insertGroup(data.toGroup()) }
             }
         }
-        listeners += firestore.listenSubcollection(groupId, "members") { docs ->
+        listenersPorGrupo.getOrPut(groupId) { mutableListOf() } += firestore.listenSubcollection(groupId, "members") { docs ->
             scope.launch {
                 docs.forEach { d ->
                     val m = d.toMember()
@@ -206,7 +212,7 @@ class SyncManager(
                 }
             }
         }
-        listeners += firestore.listenSubcollection(groupId, "movements") { docs ->
+        listenersPorGrupo.getOrPut(groupId) { mutableListOf() } += firestore.listenSubcollection(groupId, "movements") { docs ->
             scope.launch {
                 docs.forEach { d ->
                     val m = d.toMovement()
@@ -215,7 +221,7 @@ class SyncManager(
                 }
             }
         }
-        listeners += firestore.listenSubcollection(groupId, "products") { docs ->
+        listenersPorGrupo.getOrPut(groupId) { mutableListOf() } += firestore.listenSubcollection(groupId, "products") { docs ->
             scope.launch {
                 docs.forEach { d ->
                     val p = d.toProduct()
@@ -224,7 +230,7 @@ class SyncManager(
                 }
             }
         }
-        listeners += firestore.listenSubcollection(groupId, "transferAccounts") { docs ->
+        listenersPorGrupo.getOrPut(groupId) { mutableListOf() } += firestore.listenSubcollection(groupId, "transferAccounts") { docs ->
             scope.launch {
                 docs.forEach { d ->
                     val a = d.toTransferAccount()
@@ -233,7 +239,7 @@ class SyncManager(
                 }
             }
         }
-        listeners += firestore.listenSubcollection(groupId, "settlements") { docs ->
+        listenersPorGrupo.getOrPut(groupId) { mutableListOf() } += firestore.listenSubcollection(groupId, "settlements") { docs ->
             scope.launch {
                 docs.forEach { d ->
                     val s = d.toSettlement()
@@ -258,7 +264,9 @@ class SyncManager(
 
     /** Sube el grupo y su lista de UIDs de miembro (version suspendida). */
     suspend fun pushGroupNow(group: Group) {
-        val members = runCatching { db.memberDao().getMembersByGroup(group.id).first() }
+        // Solo los socios ACTIVOS tienen acceso. Al desactivar a alguien, su UID
+        // desaparece de esta lista y deja de recibir la empresa en su movil.
+        val members = runCatching { db.memberDao().getActiveMembersByGroup(group.id).first() }
             .getOrElse { emptyList() }
         val memberUids = members.mapNotNull { it.googleUid.ifBlank { null } }
         val currentUid = currentUserIdProvider()
@@ -266,6 +274,20 @@ class SyncManager(
         firestore.upsertGroup(group, uids)
             .onSuccess { recordSuccess() }
             .onFailure { recordError("empresa", friendly("empresa", it.message)) }
+    }
+
+    /**
+     * Deja de sincronizar una empresa en este dispositivo.
+     *
+     * Se usa cuando el usuario la abandona o le retiran el acceso: los datos
+     * historicos se conservan en local (sirven de evidencia), pero la empresa
+     * deja de aparecer y deja de recibir cambios.
+     */
+    fun stopWatching(groupId: String) {
+        watching.remove(groupId)
+        listenersPorGrupo.remove(groupId)?.forEach { reg ->
+            runCatching { reg.remove() }
+        }
     }
 
     fun pushMember(member: Member) {

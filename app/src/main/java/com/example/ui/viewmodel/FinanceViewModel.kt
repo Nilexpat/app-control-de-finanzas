@@ -175,6 +175,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 override fun onSettlementInserted(settlement: Settlement) = sync.pushSettlement(settlement)
                 override fun onMembershipChanged(groupId: String, memberUids: List<String>) =
                     sync.pushMembership(groupId, memberUids)
+                override fun onGroupDeleted(groupId: String) {
+                    sync.stopWatching(groupId)
+                    sync.deleteGroupEverywhere(groupId)
+                }
             })
         }
 
@@ -734,12 +738,36 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     fun deactivateMember(memberId: String) {
         val user = _currentMember.value ?: return
+        val gId = _selectedGroupId.value ?: return
         viewModelScope.launch {
-            val result = repository.deactivateMember(memberId, user)
+            val result = repository.removeMemberFromGroup(gId, memberId, user)
             result.onSuccess {
-                showMessage("Socio retirado")
+                showMessage("Socio desvinculado de la empresa (su historial se conserva)")
             }.onFailure { err ->
-                showMessage(err.message ?: "Error al retirar socio", isError = true)
+                showMessage(err.message ?: "Error al desvincular socio", isError = true)
+            }
+        }
+    }
+
+    /**
+     * El socio actual abandona la empresa.
+     * No se borra nada: se desvincula y el historial queda como evidencia.
+     */
+    fun leaveCurrentGroup(onDone: () -> Unit = {}) {
+        val user = _currentMember.value ?: return
+        val gId = _selectedGroupId.value ?: return
+        viewModelScope.launch {
+            val result = repository.leaveGroup(gId, user)
+            result.onSuccess {
+                syncManager?.stopWatching(gId)
+                showMessage("Has salido de la empresa. Tu historial se ha conservado.")
+                _currentMember.value = null
+                // Pasar a otra empresa propia, si queda alguna
+                val restantes = groups.value.filter { it.id != gId }
+                _selectedGroupId.value = restantes.firstOrNull()?.id
+                onDone()
+            }.onFailure { err ->
+                showMessage(err.message ?: "Error al salir de la empresa", isError = true)
             }
         }
     }

@@ -28,6 +28,9 @@ class FinanceRepository(private val db: AppDatabase) {
 
         /** Cambio en la lista de UIDs con acceso a una empresa. */
         fun onMembershipChanged(groupId: String, memberUids: List<String>)
+
+        /** La empresa se ha eliminado y debe desaparecer tambien de la nube. */
+        fun onGroupDeleted(groupId: String)
     }
 
     private var persistenceListener: PersistenceListener? = null
@@ -853,6 +856,9 @@ class FinanceRepository(private val db: AppDatabase) {
         groupDao.deleteMovementAuditsByGroup(groupId)
         transactionDao.deleteTransactionsByGroup(groupId)
         groupDao.deleteGroupById(groupId)
+        // Avisar a la nube: sin esto la empresa solo desaparecia de este movil
+        // y seguia existiendo para los demas miembros.
+        runCatching { persistenceListener?.onGroupDeleted(groupId) }
         return Result.success(Unit)
     }
 
@@ -885,18 +891,90 @@ class FinanceRepository(private val db: AppDatabase) {
     }
 
     suspend fun deactivateMember(memberId: String, currentUser: Member): Result<Unit> {
+        // Se reutiliza la logica de retirada, que ademas quita el acceso en la nube
+        val target = memberDao.getMemberById(memberId)
+            ?: return Result.failure(IllegalArgumentException("Miembro no encontrado"))
+        return removeMemberFromGroup(target.groupId, memberId, currentUser)
+    }
+
+    /**
+     * El administrador retira a un socio del grupo.
+     *
+     * DESVINCULA, no borra: el socio queda inactivo y deja de tener acceso, pero
+     * sus movimientos y su historial se conservan intactos como evidencia.
+     * Es lo contrario de borrar la ficha, que dejaria los movimientos huerfanos.
+     */
+    suspend fun removeMemberFromGroup(
+        groupId: String,
+        memberId: String,
+        currentUser: Member
+    ): Result<Unit> {
         if (currentUser.role != Role.ADMIN) {
             return Result.failure(IllegalAccessException("Solo un Admin puede retirar socios"))
         }
-        val target = memberDao.getMemberById(memberId) ?: return Result.failure(IllegalArgumentException("Miembro no encontrado"))
-        if (target.role == Role.ADMIN) {
-            val all = memberDao.getActiveMembersByGroup(target.groupId).first()
-            val admins = all.filter { it.role == Role.ADMIN }
+        if (memberId == currentUser.id) {
+            return Result.failure(
+                IllegalStateException("Para salir tú de la empresa usa la opción de abandonar el grupo")
+            )
+        }
+        val target = memberDao.getMemberById(memberId)
+            ?: return Result.failure(IllegalArgumentException("Miembro no encontrado"))
+        if (target.groupId != groupId) {
+            return Result.failure(IllegalArgumentException("Ese socio no pertenece a esta empresa"))
+        }
+        if (!target.active) {
+            return Result.failure(IllegalStateException("Ese socio ya está fuera de la empresa"))
+        }
+
+        // Marcar inactivo: conserva la ficha y todo su historial
+        memberDao.updateMember(target.copy(active = false))
+
+        // Quitar su acceso: en local y en la nube
+        val sinEl = (groupDao.getGroupById(groupId)?.memberUids ?: emptyList())
+            .filter { it != target.googleUid }
+        setGroupMemberUids(groupId, sinEl)
+
+        // Avisar a la nube para que su movil deje de recibir la empresa
+        notifyGroup(groupDao.getGroupById(groupId) ?: return Result.success(Unit))
+        notifyMember(target.copy(active = false))
+
+        return Result.success(Unit)
+    }
+
+    /**
+     * Un socio abandona la empresa por su cuenta.
+     *
+     * Igual que la retirada: se desvincula conservando el historial. El ultimo
+     * administrador no puede abandonar sin nombrar antes a otro, para que la
+     * empresa no quede sin nadie que la gestione.
+     */
+    suspend fun leaveGroup(groupId: String, currentUser: Member): Result<Unit> {
+        val yo = memberDao.getMemberById(currentUser.id)
+            ?: return Result.failure(IllegalArgumentException("No se encontró tu ficha de socio"))
+        if (yo.groupId != groupId) {
+            return Result.failure(IllegalArgumentException("No perteneces a esta empresa"))
+        }
+
+        if (yo.role == Role.ADMIN) {
+            val activos = memberDao.getActiveMembersByGroup(groupId).first()
+            val admins = activos.filter { it.role == Role.ADMIN }
             if (admins.size <= 1) {
-                return Result.failure(IllegalStateException("El último Admin no puede retirarse sin nombrar antes a otro Admin"))
+                return Result.failure(
+                    IllegalStateException(
+                        "Eres el único administrador. Nombra antes a otro administrador para poder salir."
+                    )
+                )
             }
         }
-        memberDao.updateMember(target.copy(active = false))
+
+        memberDao.updateMember(yo.copy(active = false))
+
+        val sinMi = (groupDao.getGroupById(groupId)?.memberUids ?: emptyList())
+            .filter { it != yo.googleUid }
+        setGroupMemberUids(groupId, sinMi)
+        notifyGroup(groupDao.getGroupById(groupId) ?: return Result.success(Unit))
+        notifyMember(yo.copy(active = false))
+
         return Result.success(Unit)
     }
 

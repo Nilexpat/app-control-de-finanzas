@@ -54,6 +54,7 @@ fun GroupScreen(
     var showCreateCompanyDialog by remember { mutableStateOf(false) }
     var showRenameCompanyDialog by remember { mutableStateOf(false) }
     var showDeleteCompanyDialog by remember { mutableStateOf(false) }
+    var showLeaveGroupDialog by remember { mutableStateOf(false) }
     // Estado del dialogo "unirse con codigo", elevado aqui para poder
     // pre-rellenar el nombre desde la cuenta de Google autenticada.
     var inputCode by remember { mutableStateOf("") }
@@ -218,6 +219,25 @@ fun GroupScreen(
                     }
                 }
             }
+            // Salir de la empresa (solo si hay una seleccionada)
+            if (activeGroup != null) {
+                item {
+                    OutlinedButton(
+                        onClick = { showLeaveGroupDialog = true },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = FinanceRed),
+                        border = BorderStroke(1.dp, FinanceRed.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("leave_group_btn")
+                    ) {
+                        Icon(Icons.Default.Logout, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Abandonar esta empresa", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
             // Group Header Card
             item {
                 Card(
@@ -838,6 +858,37 @@ fun GroupScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteCompanyDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    if (showLeaveGroupDialog && activeGroup != null) {
+        AlertDialog(
+            onDismissRequest = { showLeaveGroupDialog = false },
+            title = { Text("Abandonar empresa") },
+            text = {
+                Text(
+                    "¿Seguro que quieres salir de '${activeGroup.name}'?\n\n" +
+                    "Dejarás de tener acceso a ella, pero tu historial de movimientos " +
+                    "se conserva como evidencia. El administrador seguirá viéndola."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showLeaveGroupDialog = false
+                        viewModel.leaveCurrentGroup()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = FinanceRed),
+                    modifier = Modifier.testTag("confirm_leave_group_btn")
+                ) {
+                    Text("Salir")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveGroupDialog = false }) {
                     Text("Cancelar")
                 }
             }
