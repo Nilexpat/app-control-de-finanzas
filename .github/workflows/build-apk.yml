@@ -1,6 +1,5 @@
 name: Compilar APK
 
-# Se puede lanzar a mano desde la pestana "Actions" y tambien en cada push.
 on:
   workflow_dispatch:
   push:
@@ -8,6 +7,10 @@ on:
 
 permissions:
   contents: read
+
+env:
+  ANDROID_HOME: /opt/android-sdk
+  ANDROID_SDK_ROOT: /opt/android-sdk
 
 jobs:
   apk:
@@ -29,17 +32,30 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
-          cache-read-only: false
 
-      - name: Instalar el SDK de Android
-        uses: android-actions/setup-android@v3
-
-      - name: Aceptar licencias e instalar API 36 + build-tools
+      # Se descarga el SDK oficial a mano en lugar de usar
+      # android-actions/setup-android, que falla en los runners actuales.
+      - name: Instalar el SDK de Android (cmdline-tools)
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools" || true
+          sudo mkdir -p /opt/android-sdk/cmdline-tools
+          sudo chown -R "$USER":"$USER" /opt/android-sdk
+          cd /tmp
+          echo "Descargando command line tools..."
+          curl -sSL -o cmdtools.zip "https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip"
+          ls -lh cmdtools.zip
+          unzip -q cmdtools.zip -d /tmp/cmdtools-extract
+          mv /tmp/cmdtools-extract/cmdline-tools /opt/android-sdk/cmdline-tools/latest
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "SDK instalado en $ANDROID_HOME"
 
-      - name: Crear el keystore de debug (solo dentro de la compilacion)
+      - name: Aceptar licencias del SDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --list_installed || true
+
+      - name: Compilar el APK de debug
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           keytool -genkeypair -v \
             -keystore "${GITHUB_WORKSPACE}/debug.keystore" \
@@ -52,25 +68,21 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: Preparar google-services.json si existe el secreto
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-        run: |
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
             echo "google-services.json creado desde el secreto."
           else
-            echo "Sin secreto GOOGLE_SERVICES_JSON: la app compilara," \
-                 "pero Firebase (login y sincronizacion) no funcionara."
+            echo "Sin secreto GOOGLE_SERVICES_JSON: la app compila, pero Firebase no funcionara."
           fi
 
-      - name: Compilar el APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: Localizar el APK generado
-        run: find app/build/outputs -name "*.apk" -type f
+        if: always()
+        run: find app/build/outputs -name "*.apk" -type f 2>/dev/null || echo "No se genero ningun APK"
 
       - name: Subir el APK como descargable
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: SocioFinanzas-debug-apk
