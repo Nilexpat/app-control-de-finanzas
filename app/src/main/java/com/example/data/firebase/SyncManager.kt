@@ -200,7 +200,18 @@ class SyncManager(
     private fun attachListeners(groupId: String) {
         listenersPorGrupo.getOrPut(groupId) { mutableListOf() } += firestore.listenGroup(groupId) { data ->
             scope.launch {
-                runCatching { db.groupDao().insertGroup(data.toGroup()) }
+                val remoto = data.toGroup()
+                val yo = currentUserIdProvider()
+                // Si ya no figuro como miembro (me retiraron o sali), la empresa
+                // desaparece tambien en este dispositivo. Cubre el caso de que el
+                // movil estuviera cerrado en el momento de la retirada.
+                if (yo != null && remoto.memberUids.isNotEmpty() && !remoto.memberUids.contains(yo)) {
+                    db.groupDao().deleteGroupById(groupId)
+                    stopWatching(groupId)
+                    Log.d(TAG, "Salida detectada en $groupId: se deja de sincronizar")
+                    return@launch
+                }
+                runCatching { db.groupDao().insertGroup(remoto) }
             }
         }
         listenersPorGrupo.getOrPut(groupId) { mutableListOf() } += firestore.listenSubcollection(groupId, "members") { docs ->
