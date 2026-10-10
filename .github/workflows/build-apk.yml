@@ -98,7 +98,9 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SocioFinanzas-debug-apk
+          # El nombre incluye el numero de compilacion para que cada APK sea
+          # unico y no se confunda con los de compilaciones anteriores.
+          name: SocioFinanzas-r${{ github.run_number }}-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 90

@@ -175,7 +175,7 @@ class MainActivity : ComponentActivity() {
                                 MainNavTab.GRUPO -> {
                                     GroupScreen(
                                         viewModel = viewModel,
-                                        onSignOut = { authRepository.signOut() }
+                                        onSignOut = { viewModel.signOutAndWipeLocalData() }
                                     )
                                 }
                             }

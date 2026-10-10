@@ -153,6 +153,16 @@ class SyncManager(
             }
             db.groupDao().insertGroup(group)
 
+            // Guardar tambien la lista de UIDs con acceso a la empresa: es lo que
+            // permite que cada cuenta vea solo sus empresas en local.
+            firestore.fetchGroupMemberUids(groupId).getOrNull()?.let { uids ->
+                if (uids.isNotEmpty()) {
+                    db.groupDao().getGroupById(groupId)?.let { local ->
+                        db.groupDao().insertGroup(local.copy(memberUids = uids))
+                    }
+                }
+            }
+
             firestore.fetchMembers(groupId).getOrNull()?.forEach { m ->
                 remoteApplied.add(m.id)
                 db.memberDao().insertMember(m)
@@ -323,6 +333,18 @@ class SyncManager(
                 .onFailure { recordError("borrado de empresa", friendly("borrado", it.message)) }
             firestore.deleteInvitationsForGroup(groupId)
                 .onFailure { recordError("borrado de invitaciones", friendly("borrado", it.message)) }
+        }
+    }
+
+    /**
+     * Sincroniza en Firestore la lista de UIDs con acceso a la empresa.
+     * Se llama cuando alguien crea una empresa o acepta una invitacion.
+     */
+    fun pushMembership(groupId: String, memberUids: List<String>) {
+        scope.launch {
+            firestore.setGroupMemberUids(groupId, memberUids)
+                .onSuccess { recordSuccess() }
+                .onFailure { recordError("miembros de la empresa", friendly("miembros", it.message)) }
         }
     }
 

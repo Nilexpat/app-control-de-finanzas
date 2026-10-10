@@ -38,9 +38,19 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     private val _authenticatedUser = MutableStateFlow<com.google.firebase.auth.FirebaseUser?>(null)
     val authenticatedUser: StateFlow<com.google.firebase.auth.FirebaseUser?> = _authenticatedUser.asStateFlow()
 
+    /** UID de la cuenta con la sesion activa. Base del filtro de privacidad. */
+    private val _currentUid = MutableStateFlow<String?>(null)
+
     // State flows
-    val groups: StateFlow<List<Group>> = repository.allGroups
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    //
+    // PRIVACIDAD: la base de datos local es unica para toda la app, asi que
+    // acumula las empresas de todas las cuentas que han entrado en el
+    // dispositivo. Aqui se filtra para mostrar SOLO las empresas en las que la
+    // cuenta actual figura como miembro (memberUids).
+    val groups: StateFlow<List<Group>> = combine(repository.allGroups, _currentUid) { lista, uid ->
+        if (uid == null) emptyList()
+        else lista.filter { g -> g.memberUids.contains(uid) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _selectedGroupId = MutableStateFlow<String?>(null)
     val selectedGroupId: StateFlow<String?> = _selectedGroupId.asStateFlow()
@@ -163,6 +173,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 override fun onTransferAccountInserted(account: TransferAccount) = sync.pushTransferAccount(account)
                 override fun onInvitationInserted(invitation: Invitation) = sync.pushInvitation(invitation)
                 override fun onSettlementInserted(settlement: Settlement) = sync.pushSettlement(settlement)
+                override fun onMembershipChanged(groupId: String, memberUids: List<String>) =
+                    sync.pushMembership(groupId, memberUids)
             })
         }
 
@@ -220,6 +232,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             val uid = user.uid
             val displayName = user.displayName ?: ""
             val email = user.email ?: ""
+
+            // Activa el filtro de privacidad: solo se veran las empresas de esta cuenta
+            _currentUid.value = uid
 
             // Arrancar la sincronizacion con la nube para esta cuenta
             syncManager?.start(uid)
@@ -784,6 +799,38 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         val currentMonthMovements = movements.value.filter { DateFormatter.toMonthKey(it.occurredAt) == summary.monthKey }
         val csv = ExportHelper.generateCsv(gName, summary, currentMonthMovements)
         onReady(csv)
+    }
+
+    /**
+     * Cierra la sesion y BORRA todos los datos locales.
+     *
+     * Es imprescindible: la base de datos local es unica para toda la app, asi
+     * que sin este borrado la siguiente cuenta que entre en el dispositivo veria
+     * (y podria editar) las empresas de la cuenta anterior.
+     *
+     * No se pierde informacion: Firestore es la fuente de verdad compartida y al
+     * volver a entrar se descargan de nuevo las empresas propias.
+     */
+    fun signOutAndWipeLocalData() {
+        // Detener la sincronizacion para que ninguna escucha intente escribir
+        // mientras se borra
+        syncManager?.stop()
+
+        _authenticatedUser.value = null
+        _currentUid.value = null
+        _currentMember.value = null
+        _selectedGroupId.value = null
+
+        persistCurrentMemberId(null)
+
+        viewModelScope.launch {
+            runCatching {
+                repository.wipeAllLocalData()
+            }.onFailure { e ->
+                android.util.Log.w("FinanceViewModel", "No se pudo borrar todo: ${e.message}")
+            }
+            com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+        }
     }
 
     fun shareWhatsAppSummary(onReady: (String) -> Unit) {

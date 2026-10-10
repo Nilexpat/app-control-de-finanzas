@@ -25,6 +25,9 @@ class FinanceRepository(private val db: AppDatabase) {
         fun onTransferAccountInserted(account: TransferAccount)
         fun onInvitationInserted(invitation: Invitation)
         fun onSettlementInserted(settlement: Settlement)
+
+        /** Cambio en la lista de UIDs con acceso a una empresa. */
+        fun onMembershipChanged(groupId: String, memberUids: List<String>)
     }
 
     private var persistenceListener: PersistenceListener? = null
@@ -796,6 +799,14 @@ class FinanceRepository(private val db: AppDatabase) {
             googleUid = creatorGoogleUid
         )
         memberDao.insertMember(adminMember)
+
+        // Registrar en la propia empresa quien tiene acceso: el creador.
+        if (creatorGoogleUid.isNotBlank()) {
+            groupDao.insertGroup(group.copy(memberUids = listOf(creatorGoogleUid)))
+            runCatching {
+                persistenceListener?.onMembershipChanged(newGroupId, listOf(creatorGoogleUid))
+            }
+        }
         notifyMember(adminMember)
 
         // Add standard transfer accounts
@@ -991,6 +1002,13 @@ class FinanceRepository(private val db: AppDatabase) {
         memberDao.insertMember(newMember)
         notifyMember(newMember)
 
+        // Anadir el UID del nuevo socio a la lista de acceso de la empresa,
+        // en local y en la nube.
+        if (googleUid.isNotBlank()) {
+            val actuales = groupDao.getGroupById(inv.groupId)?.memberUids ?: emptyList()
+            setGroupMemberUids(inv.groupId, actuales + googleUid)
+        }
+
         // Consumir la invitacion en local y en la nube
         val updatedInvitation = inv.copy(usedCount = inv.usedCount + 1)
         invitationDao.updateInvitation(updatedInvitation)
@@ -1020,6 +1038,44 @@ class FinanceRepository(private val db: AppDatabase) {
             sharePercentCentecimas = 2000, // 20% por defecto
             googleUid = googleUid
         )
+    }
+
+    /**
+     * Borra TODOS los datos locales.
+     *
+     * Se usa al cerrar sesion. Sin esto, los datos de una cuenta quedan en el
+     * dispositivo y la siguiente cuenta que entre los veria (y podria editarlos),
+     * porque la base de datos local es unica para toda la app.
+     *
+     * No se pierde nada: Firestore es la fuente de verdad compartida, y al
+     * volver a iniciar sesion se descargan de nuevo las empresas propias.
+     */
+    suspend fun wipeAllLocalData() {
+        groupDao.getAllGroups().first().forEach { group ->
+            groupDao.deleteMembersByGroup(group.id)
+            groupDao.deleteProductsByGroup(group.id)
+            groupDao.deleteMovementsByGroup(group.id)
+            groupDao.deleteAccountsByGroup(group.id)
+            groupDao.deleteSettlementsByGroup(group.id)
+            groupDao.deleteNotificationsByGroup(group.id)
+            groupDao.deleteMovementAuditsByGroup(group.id)
+            transactionDao.deleteTransactionsByGroup(group.id)
+            groupDao.deleteGroupById(group.id)
+        }
+        invitationDao.deleteAllInvitations()
+    }
+
+    /**
+     * Guarda la lista de UIDs con acceso a una empresa, en local y en la nube.
+     * Se llama al crear la empresa, al aceptar una invitacion y al descargar
+     * un grupo desde Firestore.
+     */
+    suspend fun setGroupMemberUids(groupId: String, uids: List<String>) {
+        val group = groupDao.getGroupById(groupId) ?: return
+        val limpios = uids.filter { it.isNotBlank() }.distinct()
+        if (group.memberUids == limpios) return
+        groupDao.insertGroup(group.copy(memberUids = limpios))
+        runCatching { persistenceListener?.onMembershipChanged(groupId, limpios) }
     }
 
     private fun generateInviteCode(): String {

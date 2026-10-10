@@ -53,7 +53,11 @@ data class Group(
     val currency: String = "COP",
     val settlementMode: String = "DESEMBOLSO", // "DESEMBOLSO" or "MENSUAL"
     val lastDisbursementAt: Long = 0L,
-    val currentPeriodStartAt: Long = System.currentTimeMillis()
+    val currentPeriodStartAt: Long = System.currentTimeMillis(),
+    // UIDs de Google de los miembros con acceso a esta empresa. Es lo que
+    // permite filtrar en local: cada cuenta solo ve las empresas donde figura.
+    // Room convierte List<String> automaticamente (no hace falta TypeConverter).
+    val memberUids: List<String> = emptyList()
 )
 
 @Entity(tableName = "members")

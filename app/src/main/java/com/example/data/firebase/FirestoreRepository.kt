@@ -150,6 +150,11 @@ class FirestoreRepository(
         groupsCol.document(groupId).update("memberUids", FieldValue.arrayUnion(userId)).await()
     }.map { }.onFailure { Log.w(TAG, "addMemberUid($groupId): ${it.message}") }
 
+    /** Reemplaza por completo la lista de UIDs con acceso al grupo. */
+    suspend fun setGroupMemberUids(groupId: String, memberUids: List<String>): Result<Unit> = runCatching {
+        groupsCol.document(groupId).update("memberUids", memberUids).await()
+    }.map { }.onFailure { Log.w(TAG, "setGroupMemberUids($groupId): ${it.message}") }
+
     // -------------------------------------------------------------- borrados
 
     suspend fun deleteGroupTree(groupId: String): Result<Unit> = runCatching {
@@ -174,6 +179,16 @@ class FirestoreRepository(
             ?.data
             ?.toGroup()
     }.onFailure { Log.w(TAG, "fetchGroup($groupId): ${it.message}") }
+
+    /** Lista de UIDs con acceso al grupo, tal como esta en Firestore. */
+    suspend fun fetchGroupMemberUids(groupId: String): Result<List<String>> = runCatching {
+        val data = groupsCol.document(groupId).get().await().data
+        val crudo = data?.get("memberUids")
+        when (crudo) {
+            is List<*> -> crudo.filterIsInstance<String>().filter { it.isNotBlank() }
+            else -> emptyList()
+        }
+    }.onFailure { Log.w(TAG, "fetchGroupMemberUids($groupId): ${it.message}") }
 
     suspend fun fetchMembers(groupId: String): Result<List<Member>> =
         fetchSubcollection(groupId, "members") { it.toMember() }

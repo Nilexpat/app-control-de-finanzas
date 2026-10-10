@@ -153,6 +153,9 @@ interface InvitationDao {
 
     @Update
     suspend fun updateInvitation(invitation: Invitation)
+
+    @Query("DELETE FROM invitations")
+    suspend fun deleteAllInvitations()
 }
 
 @Dao

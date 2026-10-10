@@ -22,7 +22,7 @@ import com.example.data.model.Transaction
         NotificationItem::class,
         Transaction::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -95,6 +95,23 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Anade memberUids a groups: lista de UIDs con acceso a la empresa.
+        // Es lo que permite que cada cuenta vea solo sus empresas.
+        // La lista se rellena a partir de los googleUid ya guardados en members,
+        // separados por coma (Room convierte List<String> con ',').
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `groups` ADD COLUMN `memberUids` TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "UPDATE `groups` SET `memberUids` = COALESCE((" +
+                        "SELECT GROUP_CONCAT(`googleUid`, ',') FROM `members` " +
+                        "WHERE `members`.`groupId` = `groups`.`id` " +
+                        "AND `members`.`googleUid` <> ''" +
+                        "), '')"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -102,7 +119,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sociofinanzas_database_v2"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_1_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_1_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigration(true)
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
