@@ -1,0 +1,79 @@
+name: Compilar APK
+
+# Se puede lanzar a mano desde la pestana "Actions" y tambien en cada push.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: Generar APK de debug
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Descargar el codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Instalar Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+          cache-read-only: false
+
+      - name: Instalar el SDK de Android
+        uses: android-actions/setup-android@v3
+
+      - name: Aceptar licencias e instalar API 36 + build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools" || true
+
+      - name: Crear el keystore de debug (solo dentro de la compilacion)
+        run: |
+          keytool -genkeypair -v \
+            -keystore "${GITHUB_WORKSPACE}/debug.keystore" \
+            -storetype JKS \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Preparar google-services.json si existe el secreto
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "google-services.json creado desde el secreto."
+          else
+            echo "Sin secreto GOOGLE_SERVICES_JSON: la app compilara," \
+                 "pero Firebase (login y sincronizacion) no funcionara."
+          fi
+
+      - name: Compilar el APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Localizar el APK generado
+        run: find app/build/outputs -name "*.apk" -type f
+
+      - name: Subir el APK como descargable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SocioFinanzas-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 90
