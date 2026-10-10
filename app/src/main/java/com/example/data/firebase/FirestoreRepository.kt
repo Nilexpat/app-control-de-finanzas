@@ -81,7 +81,7 @@ class FirestoreRepository(
 
     // ---------------------------------------------------------------- perfil
 
-    suspend fun syncUserProfile(user: FirebaseUser): Result<Unit> = runCatching<Unit> {
+    suspend fun syncUserProfile(user: FirebaseUser): Result<Unit> = runCatching {
         usersCol.document(user.uid).set(
             mapOf(
                 "uid" to user.uid,
@@ -92,8 +92,7 @@ class FirestoreRepository(
             ),
             SetOptions.merge()
         ).await()
-        Unit
-    }.onFailure { Log.w(TAG, "syncUserProfile: ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "syncUserProfile: ${it.message}") }
 
     /** UIDs de usuario de todas las empresas a las que pertenece esta cuenta. */
     suspend fun fetchGroupIdsForUser(userId: String): Result<List<String>> = runCatching {
@@ -104,60 +103,52 @@ class FirestoreRepository(
 
     // ------------------------------------------------------------ escrituras
 
-    suspend fun upsertGroup(group: Group, memberUids: List<String>): Result<Unit> = runCatching<Unit> {
+    suspend fun upsertGroup(group: Group, memberUids: List<String>): Result<Unit> = runCatching {
         val data = group.toFirestore().toMutableMap()
         data["memberUids"] = memberUids
         data["ownerId"] = memberUids.firstOrNull() ?: uid() ?: ""
         groupsCol.document(group.id).set(data, SetOptions.merge()).await()
-        Unit
-    }.onFailure { Log.w(TAG, "upsertGroup(${group.id}): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "upsertGroup(${group.id}): ${it.message}") }
 
-    suspend fun upsertMember(member: Member): Result<Unit> = runCatching<Unit> {
+    suspend fun upsertMember(member: Member): Result<Unit> = runCatching {
         groupsCol.document(member.groupId)
             .collection("members").document(member.id)
             .set(member.toFirestore(), SetOptions.merge()).await()
-            Unit
-    }.onFailure { Log.w(TAG, "upsertMember(${member.id}): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "upsertMember(${member.id}): ${it.message}") }
 
-    suspend fun upsertMovement(movement: Movement): Result<Unit> = runCatching<Unit> {
+    suspend fun upsertMovement(movement: Movement): Result<Unit> = runCatching {
         groupsCol.document(movement.groupId)
             .collection("movements").document(movement.id)
             .set(movement.toFirestore(), SetOptions.merge()).await()
-            Unit
-    }.onFailure { Log.w(TAG, "upsertMovement(${movement.id}): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "upsertMovement(${movement.id}): ${it.message}") }
 
-    suspend fun upsertProduct(product: Product): Result<Unit> = runCatching<Unit> {
+    suspend fun upsertProduct(product: Product): Result<Unit> = runCatching {
         groupsCol.document(product.groupId)
             .collection("products").document(product.id)
             .set(product.toFirestore(), SetOptions.merge()).await()
-            Unit
-    }.onFailure { Log.w(TAG, "upsertProduct(${product.id}): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "upsertProduct(${product.id}): ${it.message}") }
 
-    suspend fun upsertTransferAccount(account: TransferAccount): Result<Unit> = runCatching<Unit> {
+    suspend fun upsertTransferAccount(account: TransferAccount): Result<Unit> = runCatching {
         groupsCol.document(account.groupId)
             .collection("transferAccounts").document(account.id)
             .set(account.toFirestore(), SetOptions.merge()).await()
-            Unit
-    }.onFailure { Log.w(TAG, "upsertTransferAccount(${account.id}): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "upsertTransferAccount(${account.id}): ${it.message}") }
 
-    suspend fun upsertSettlement(settlement: Settlement): Result<Unit> = runCatching<Unit> {
+    suspend fun upsertSettlement(settlement: Settlement): Result<Unit> = runCatching {
         groupsCol.document(settlement.groupId)
             .collection("settlements").document(settlement.id)
             .set(settlement.toFirestore(), SetOptions.merge()).await()
-            Unit
-    }.onFailure { Log.w(TAG, "upsertSettlement(${settlement.id}): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "upsertSettlement(${settlement.id}): ${it.message}") }
 
-    suspend fun upsertInvitation(invitation: Invitation): Result<Unit> = runCatching<Unit> {
+    suspend fun upsertInvitation(invitation: Invitation): Result<Unit> = runCatching {
         invitationsCol.document(invitation.id)
             .set(invitation.toFirestore(), SetOptions.merge()).await()
-            Unit
-    }.onFailure { Log.w(TAG, "upsertInvitation(${invitation.id}): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "upsertInvitation(${invitation.id}): ${it.message}") }
 
     /** Anade un UID a la lista de miembros del grupo (arrayUnion es idempotente). */
-    suspend fun addMemberUid(groupId: String, userId: String): Result<Unit> = runCatching<Unit> {
+    suspend fun addMemberUid(groupId: String, userId: String): Result<Unit> = runCatching {
         groupsCol.document(groupId).update("memberUids", FieldValue.arrayUnion(userId)).await()
-        Unit
-    }.onFailure { Log.w(TAG, "addMemberUid($groupId): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "addMemberUid($groupId): ${it.message}") }
 
     // -------------------------------------------------------------- borrados
 
@@ -168,12 +159,12 @@ class FirestoreRepository(
                 groupRef.collection(sub).get().await().documents.forEach { it.reference.delete().await() }
             }
         groupRef.delete().await()
-    }.onFailure { Log.w(TAG, "deleteGroupTree($groupId): ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "deleteGroupTree($groupId): ${it.message}") }
 
     suspend fun deleteInvitationsForGroup(groupId: String): Result<Unit> = runCatching {
         invitationsCol.whereEqualTo("groupId", groupId).get().await()
             .documents.forEach { it.reference.delete().await() }
-    }.onFailure { Log.w(TAG, "deleteInvitationsForGroup: ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "deleteInvitationsForGroup: ${it.message}") }
 
     // -------------------------------------------------------------- lecturas
 
@@ -225,11 +216,10 @@ class FirestoreRepository(
             ?.toInvitation()
     }.onFailure { Log.w(TAG, "findInvitationByCode: ${it.message}") }
 
-    suspend fun markInvitationUsed(invitationId: String, newUsedCount: Int): Result<Unit> = runCatching<Unit> {
+    suspend fun markInvitationUsed(invitationId: String, newUsedCount: Int): Result<Unit> = runCatching {
         invitationsCol.document(invitationId)
             .set(mapOf("usedCount" to newUsedCount), SetOptions.merge()).await()
-            Unit
-    }.onFailure { Log.w(TAG, "markInvitationUsed: ${it.message}") }
+    }.map { }.onFailure { Log.w(TAG, "markInvitationUsed: ${it.message}") }
 
     // ------------------------------------------------------- tiempo real
 
