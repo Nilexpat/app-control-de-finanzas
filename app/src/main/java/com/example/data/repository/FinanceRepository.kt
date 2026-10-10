@@ -869,6 +869,10 @@ class FinanceRepository(private val db: AppDatabase) {
     suspend fun getMemberByGoogleUidAnywhere(googleUid: String): Member? =
         memberDao.getMemberByGoogleUidAnywhere(googleUid)
 
+    /** Ficha de identidad sin grupo (groupId vacio) de esa cuenta de Google. */
+    suspend fun getProfileMember(googleUid: String): Member? =
+        memberDao.getProfileMemberByGoogleUid(googleUid)
+
     suspend fun getMemberByGoogleUidInGroup(googleUid: String, groupId: String): Member? =
         memberDao.getMemberByGoogleUidInGroup(googleUid, groupId)
 

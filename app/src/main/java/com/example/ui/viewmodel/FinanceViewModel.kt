@@ -592,12 +592,14 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 if (remaining.isNotEmpty()) {
                     selectGroup(remaining.first().id)
                 } else {
-                    // Ya no queda ninguna empresa: la app vuelve al estado inicial
+                    // Ya no queda ninguna empresa: la app vuelve al estado inicial.
+                    // Se usa la ficha perfil (sin grupo) para no acabar apuntando a
+                    // una empresa distinta de la que esta seleccionada.
                     _selectedGroupId.value = null
-                    // Se recupera la identidad de la cuenta (sin grupo asociado)
                     val uid = _authenticatedUser.value?.uid
                     if (uid != null) {
-                        _currentMember.value = repository.bindAuthenticatedUser(uid, user.name, user.email)
+                        _currentMember.value = repository.getProfileMember(uid)
+                            ?: repository.bindAuthenticatedUser(uid, user.name, user.email)
                     }
                 }
                 onSuccess()
