@@ -47,6 +47,50 @@ class SyncManager(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val listeners = mutableListOf<ListenerRegistration>()
 
+    /**
+     * Ultimo fallo de sincronizacion, para poder mostrarlo en la app.
+     * Antes todos los errores se guardaban solo en el registro y pasaban
+     * desapercibidos: la app parecia funcionar mientras no sincronizaba nada.
+     */
+    data class SyncError(val message: String, val at: Long = System.currentTimeMillis())
+
+    private val _lastError = kotlinx.coroutines.flow.MutableStateFlow<SyncError?>(null)
+    val lastError: kotlinx.coroutines.flow.StateFlow<SyncError?> = _lastError
+
+    /** Marca de la ultima sincronizacion correcta. */
+    private val _lastSuccessAt = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val lastSuccessAt: kotlinx.coroutines.flow.StateFlow<Long> = _lastSuccessAt
+
+    private fun recordError(where: String, message: String?) {
+        val text = message ?: "error desconocido"
+        Log.w(TAG, "$where: $text")
+        _lastError.value = SyncError("No se pudo sincronizar ($where): $text")
+    }
+
+    private fun recordSuccess() {
+        _lastSuccessAt.value = System.currentTimeMillis()
+    }
+
+    /** Traduce los errores mas habituales de Firestore a algo entendible. */
+    private fun friendly(where: String, raw: String?): String {
+        val msg = raw ?: return "No se pudo sincronizar ($where)"
+        return when {
+            msg.contains("PERMISSION_DENIED", ignoreCase = true) ||
+                msg.contains("Missing or insufficient permissions", ignoreCase = true) ->
+                "Firebase rechazó la operación ($where). Revisa las reglas de seguridad."
+
+            msg.contains("FAILED_PRECONDITION", ignoreCase = true) ||
+                msg.contains("index", ignoreCase = true) ->
+                "Falta un índice en Firestore ($where). Abre la consola de Firebase y créalo."
+
+            msg.contains("UNAVAILABLE", ignoreCase = true) ||
+                msg.contains("network", ignoreCase = true) ->
+                "Sin conexión ($where). Se reintentará automáticamente."
+
+            else -> "No se pudo sincronizar ($where): $msg"
+        }
+    }
+
     /** Ids que acaban de llegar de la nube y no deben reenviarse. */
     private val remoteApplied = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
@@ -210,15 +254,20 @@ class SyncManager(
         val currentUid = currentUserIdProvider()
         val uids = if (currentUid != null && currentUid !in memberUids) memberUids + currentUid else memberUids
         firestore.upsertGroup(group, uids)
+            .onSuccess { recordSuccess() }
+            .onFailure { recordError("empresa", friendly("empresa", it.message)) }
     }
 
     fun pushMember(member: Member) {
         scope.launch {
             if (!shouldPush(member.id)) return@launch
             firestore.upsertMember(member)
+                .onSuccess { recordSuccess() }
+                .onFailure { recordError("socio", friendly("socio", it.message)) }
             // Mantener la lista de miembros del grupo al dia
             if (member.googleUid.isNotBlank()) {
                 firestore.addMemberUid(member.groupId, member.googleUid)
+                    .onFailure { recordError("lista de socios", friendly("lista de socios", it.message)) }
             }
         }
     }
@@ -227,6 +276,8 @@ class SyncManager(
         scope.launch {
             if (!shouldPush(movement.id)) return@launch
             firestore.upsertMovement(movement)
+                .onSuccess { recordSuccess() }
+                .onFailure { recordError("movimiento", friendly("movimiento", it.message)) }
         }
     }
 
@@ -234,6 +285,8 @@ class SyncManager(
         scope.launch {
             if (!shouldPush(product.id)) return@launch
             firestore.upsertProduct(product)
+                .onSuccess { recordSuccess() }
+                .onFailure { recordError("producto", friendly("producto", it.message)) }
         }
     }
 
@@ -241,6 +294,8 @@ class SyncManager(
         scope.launch {
             if (!shouldPush(account.id)) return@launch
             firestore.upsertTransferAccount(account)
+                .onSuccess { recordSuccess() }
+                .onFailure { recordError("cuenta", friendly("cuenta", it.message)) }
         }
     }
 
@@ -248,6 +303,8 @@ class SyncManager(
         scope.launch {
             if (!shouldPush(settlement.id)) return@launch
             firestore.upsertSettlement(settlement)
+                .onSuccess { recordSuccess() }
+                .onFailure { recordError("corte", friendly("corte", it.message)) }
         }
     }
 
@@ -255,14 +312,23 @@ class SyncManager(
         scope.launch {
             if (!shouldPush(invitation.id)) return@launch
             firestore.upsertInvitation(invitation)
+                .onSuccess { recordSuccess() }
+                .onFailure { recordError("invitación", friendly("invitación", it.message)) }
         }
     }
 
     fun deleteGroupEverywhere(groupId: String) {
         scope.launch {
             firestore.deleteGroupTree(groupId)
+                .onFailure { recordError("borrado de empresa", friendly("borrado", it.message)) }
             firestore.deleteInvitationsForGroup(groupId)
+                .onFailure { recordError("borrado de invitaciones", friendly("borrado", it.message)) }
         }
+    }
+
+    /** Limpia el ultimo error (cuando la app ya lo ha mostrado). */
+    fun clearError() {
+        _lastError.value = null
     }
 
     companion object {

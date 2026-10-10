@@ -172,6 +172,19 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             firestoreRepository.findInvitationByCode(code).getOrNull()
         }
 
+        // Mostrar en pantalla los fallos de sincronizacion. Antes se perdian en
+        // el registro y la app parecia funcionar mientras no sincronizaba nada.
+        syncManager?.let { sync ->
+            viewModelScope.launch {
+                sync.lastError.collect { err ->
+                    if (err != null) {
+                        showMessage(err.message, isError = true)
+                        sync.clearError()
+                    }
+                }
+            }
+        }
+
         viewModelScope.launch {
             groups.collectLatest { groupList ->
                 if (groupList.isNotEmpty() && _selectedGroupId.value == null) {
