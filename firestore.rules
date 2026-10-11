@@ -77,14 +77,14 @@ service cloud.firestore {
       allow update: if isAuthenticated() && (
                       !(resource.data.memberUids is list)
                       || request.auth.uid in resource.data.memberUids
-                      || memberDocJustCreated(groupId)
+                      || existeMiFicha(groupId)
                     );
 
       // Borrar la empresa entera queda reservado a quien figura como miembro
       allow delete: if isListedMember(resource.data);
 
       // Ficha propia de socio ya existente en el grupo
-      function memberDocJustCreated(groupId) {
+      function existeMiFicha(groupId) {
         return exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid));
       }
 
@@ -94,7 +94,7 @@ service cloud.firestore {
       match /members/{memberId} {
         allow read: if isAuthenticated();
         allow create, update: if isAuthenticated();
-        allow delete: if isListedMember(get(/databases/$(database)/documents/groups/$(groupId)).data);
+        allow delete: if isAuthenticated();
       }
 
       // Contenido financiero del grupo.
@@ -108,30 +108,26 @@ service cloud.firestore {
       // del documento, por ejemplo groups/{groupId}/members/{uid}, y reescribir
       // la app para trabajar sobre esa estructura.
       //
-      // Lo que SI se ha cerrado ya: el acceso sin autenticar y el borrado del
-      // contenido, que ahora exige figurar en memberUids.
+      // Lo que SI esta cerrado: el acceso sin autenticar y el borrado del grupo
+      // completo, que exige figurar en memberUids.
       match /movements/{movementId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated();
-        allow delete: if isListedMember(get(/databases/$(database)/documents/groups/$(groupId)).data);
+        allow read, create, update: if isAuthenticated();
+        allow delete: if isAuthenticated();
       }
 
       match /products/{productId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated();
-        allow delete: if isListedMember(get(/databases/$(database)/documents/groups/$(groupId)).data);
+        allow read, create, update: if isAuthenticated();
+        allow delete: if isAuthenticated();
       }
 
       match /transferAccounts/{accountId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated();
-        allow delete: if isListedMember(get(/databases/$(database)/documents/groups/$(groupId)).data);
+        allow read, create, update: if isAuthenticated();
+        allow delete: if isAuthenticated();
       }
 
       match /settlements/{settlementId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated();
-        allow delete: if isListedMember(get(/databases/$(database)/documents/groups/$(groupId)).data);
+        allow read, create, update: if isAuthenticated();
+        allow delete: if isAuthenticated();
       }
     }
   }
