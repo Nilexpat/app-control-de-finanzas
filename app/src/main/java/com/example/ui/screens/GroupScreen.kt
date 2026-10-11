@@ -239,6 +239,93 @@ fun GroupScreen(
                 }
             }
 
+            // Metodos de pago (cuentas de transferencia). Solo el Admin puede
+            // agregarlas o eliminarlas.
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("payment_methods_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = BrandSurface),
+                    border = BorderStroke(1.dp, BrandBorder)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Métodos de pago",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = BrandDark
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Cuentas o bancos que aparecen al registrar una transferencia.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BrandTextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        if (transferAccounts.isEmpty()) {
+                            Text(
+                                text = "Todavía no has agregado ninguna cuenta.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BrandTextSecondary
+                            )
+                        } else {
+                            // Lista sin repetidos: se agrupa por nombre para que
+                            // nunca se vean duplicados, aunque en la base los haya.
+                            transferAccounts
+                                .distinctBy { it.name.trim().lowercase() }
+                                .forEach { cuenta ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.AccountBalance,
+                                                contentDescription = null,
+                                                tint = BrandTextSecondary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(cuenta.name, style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                        if (isAdmin) {
+                                            IconButton(
+                                                onClick = { viewModel.deleteTransferAccount(cuenta.id) },
+                                                modifier = Modifier.testTag("delete_account_${cuenta.id}")
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Delete,
+                                                    contentDescription = "Eliminar ${cuenta.name}",
+                                                    tint = FinanceRed,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                        }
+
+                        if (isAdmin) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            OutlinedButton(
+                                onClick = { showAddAccountDialog = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("add_account_btn")
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Agregar cuenta o banco")
+                            }
+                        }
+                    }
+                }
+            }
+
             // Group Header Card
             item {
                 Card(
