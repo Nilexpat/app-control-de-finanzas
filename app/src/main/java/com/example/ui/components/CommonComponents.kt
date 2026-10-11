@@ -268,15 +268,26 @@ fun MovementItemRow(
         MovementType.ABONO -> "+"
     }
 
-    val lines = JsonHelper.deserializeLines(movement.linesJson)
-    val titleText = if (lines.isNotEmpty()) {
-        lines.joinToString(", ") { "${it.productName} (x${it.quantity})" }
-    } else if (movement.type == MovementType.PRESTAMO) {
-        "Préstamo a ${movement.debtorMemberName ?: movement.registeredByName}"
-    } else if (movement.type == MovementType.ABONO) {
-        "Abono de ${movement.debtorMemberName ?: movement.registeredByName}"
+    // Titulo: "Cliente · Tipo". El monto ya se muestra a la derecha de la fila,
+    // asi que aqui no se repite para no duplicarlo. El detalle de los productos
+    // se ve al abrir el movimiento.
+    val lineas = JsonHelper.deserializeLines(movement.linesJson)
+    val nombreCliente = movement.debtorMemberName?.takeIf { it.isNotBlank() }
+        ?: movement.note.takeIf { it.isNotBlank() }
+        ?: movement.registeredByName
+    val tipoTexto = when (movement.type) {
+        MovementType.VENTA -> "Venta"
+        MovementType.COMPRA -> "Compra"
+        MovementType.PRESTAMO -> "Préstamo"
+        MovementType.ABONO -> "Abono"
+    }
+    val titleText = "$nombreCliente · $tipoTexto"
+
+    // Numero de productos como linea secundaria breve
+    val subtitleText = if (lineas.isNotEmpty()) {
+        if (lineas.size == 1) "1 producto" else "${lineas.size} productos"
     } else {
-        movement.note.ifBlank { "Movimiento registrado" }
+        null
     }
 
     Card(
