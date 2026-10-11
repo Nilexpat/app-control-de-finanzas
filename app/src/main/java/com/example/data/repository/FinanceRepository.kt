@@ -31,6 +31,9 @@ class FinanceRepository(private val db: AppDatabase) {
 
         /** La empresa se ha eliminado y debe desaparecer tambien de la nube. */
         fun onGroupDeleted(groupId: String)
+
+        /** Una cuenta de transferencia se ha eliminado. */
+        fun onTransferAccountDeleted(accountId: String)
     }
 
     private var persistenceListener: PersistenceListener? = null
@@ -815,11 +818,18 @@ class FinanceRepository(private val db: AppDatabase) {
             }
         }
 
-        // Add standard transfer accounts
+        // Add standard transfer accounts.
+        // El id se deriva del nombre: si la empresa se descarga despues desde
+        // Firestore, las cuentas se sobrescriben en lugar de DUPLICARSE.
         val defaultAccounts = listOf("Nequi", "Daviplata", "Bancolombia", "Otra")
         for (acc in defaultAccounts) {
-            transferAccountDao.insertAccount(TransferAccount(groupId = newGroupId, name = acc))
-            notifyTransferAccount(TransferAccount(groupId = newGroupId, name = acc))
+            val cuenta = TransferAccount(
+                id = "acc_${newGroupId}_${acc.lowercase().replace(" ", "_")}",
+                groupId = newGroupId,
+                name = acc
+            )
+            transferAccountDao.insertAccount(cuenta)
+            notifyTransferAccount(cuenta)
         }
 
         // Notification
@@ -1064,6 +1074,21 @@ class FinanceRepository(private val db: AppDatabase) {
             )
         }
 
+        // PRIMERO: si esta cuenta ya pertenece al grupo, se devuelve su ficha tal
+        // cual. Es importante comprobarlo ANTES de validar caducidad o usos: si no,
+        // al reintentar (por ejemplo tras un aviso de error) la invitacion ya
+        // figuraba como usada y se creaba una ficha DUPLICADA del mismo socio.
+        if (googleUid.isNotBlank()) {
+            memberDao.getMemberByGoogleUidInGroup(googleUid, inv.groupId)?.let { existente ->
+                // Se asegura de que conste como miembro con acceso
+                val actuales = groupDao.getGroupById(inv.groupId)?.memberUids ?: emptyList()
+                if (!actuales.contains(googleUid)) {
+                    setGroupMemberUids(inv.groupId, actuales + googleUid)
+                }
+                return Result.success(existente)
+            }
+        }
+
         if (inv.isRevoked) {
             return Result.failure(IllegalStateException("Esta invitación ha sido revocada"))
         }
@@ -1072,11 +1097,6 @@ class FinanceRepository(private val db: AppDatabase) {
         }
         if (inv.usedCount >= inv.maxUses) {
             return Result.failure(IllegalStateException("Esta invitación ya fue utilizada"))
-        }
-
-        // Si esta cuenta ya pertenece al grupo, se devuelve su ficha existente
-        if (googleUid.isNotBlank()) {
-            memberDao.getMemberByGoogleUidInGroup(googleUid, inv.groupId)?.let { return Result.success(it) }
         }
 
         val newMember = buildInvitedMember(inv, userName, userEmail, googleUid)
@@ -1110,7 +1130,12 @@ class FinanceRepository(private val db: AppDatabase) {
                 .replaceFirstChar { it.uppercase() }
         }
         val resolvedEmail = userEmail.ifBlank { "socio@google.com" }
+        // El id se deriva del UID cuando lo hay: asi insertar dos veces a la misma
+        // persona sobrescribe la misma fila en lugar de crear un socio duplicado.
+        val id = if (googleUid.isNotBlank()) "user_${inv.groupId}_$googleUid"
+                 else "user_" + UUID.randomUUID().toString().take(12)
         return Member(
+            id = id,
             groupId = inv.groupId,
             name = resolvedName,
             email = resolvedEmail,
@@ -1171,10 +1196,48 @@ class FinanceRepository(private val db: AppDatabase) {
         if (currentUser.role != Role.ADMIN) {
             return Result.failure(IllegalAccessException("Solo un Admin puede administrar cuentas"))
         }
-        val acc = TransferAccount(groupId = groupId, name = name.trim())
+        val limpio = name.trim()
+        if (limpio.isBlank()) {
+            return Result.failure(IllegalArgumentException("El nombre de la cuenta no puede estar vacío"))
+        }
+        // Id derivado del nombre: evita que la misma cuenta se duplique
+        val acc = TransferAccount(
+            id = "acc_${groupId}_${limpio.lowercase().replace(" ", "_")}",
+            groupId = groupId,
+            name = limpio
+        )
         transferAccountDao.insertAccount(acc)
         notifyTransferAccount(acc)
         return Result.success(acc)
+    }
+
+    /** Elimina una cuenta de transferencia (para quitar duplicados o las que no uses). */
+    suspend fun deleteTransferAccount(accountId: String, currentUser: Member): Result<Unit> {
+        if (currentUser.role != Role.ADMIN) {
+            return Result.failure(IllegalAccessException("Solo un Admin puede administrar cuentas"))
+        }
+        transferAccountDao.deleteAccountById(accountId)
+        runCatching { persistenceListener?.onTransferAccountDeleted(accountId) }
+        return Result.success(Unit)
+    }
+
+    /**
+     * Quita las cuentas duplicadas de una empresa (mismo nombre repetido),
+     * conservando una de cada. Limpia los duplicados que crearon las versiones
+     * anteriores, cuando cada insercion generaba un id aleatorio distinto.
+     */
+    suspend fun dedupeTransferAccounts(groupId: String): Int {
+        val cuentas = transferAccountDao.getAccountsByGroup(groupId).first()
+        var borradas = 0
+        cuentas.groupBy { it.name.trim().lowercase() }.forEach { (_, grupo) ->
+            if (grupo.size <= 1) return@forEach
+            grupo.drop(1).forEach { sobrante ->
+                transferAccountDao.deleteAccountById(sobrante.id)
+                runCatching { persistenceListener?.onTransferAccountDeleted(sobrante.id) }
+                borradas++
+            }
+        }
+        return borradas
     }
 
 

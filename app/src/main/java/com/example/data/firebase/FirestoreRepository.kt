@@ -134,6 +134,10 @@ class FirestoreRepository(
             .set(account.toFirestore(), SetOptions.merge()).await()
     }.map { }.onFailure { Log.w(TAG, "upsertTransferAccount(${account.id}): ${it.message}") }
 
+    suspend fun deleteTransferAccount(groupId: String, accountId: String): Result<Unit> = runCatching {
+        groupsCol.document(groupId).collection("transferAccounts").document(accountId).delete().await()
+    }.map { }.onFailure { Log.w(TAG, "deleteTransferAccount($accountId): ${it.message}") }
+
     suspend fun upsertSettlement(settlement: Settlement): Result<Unit> = runCatching {
         groupsCol.document(settlement.groupId)
             .collection("settlements").document(settlement.id)

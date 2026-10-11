@@ -360,6 +360,15 @@ class SyncManager(
         }
     }
 
+    /** Elimina una cuenta de transferencia tambien en la nube. */
+    fun deleteTransferAccount(groupId: String, accountId: String) {
+        scope.launch {
+            firestore.deleteTransferAccount(groupId, accountId)
+                .onSuccess { recordSuccess() }
+                .onFailure { recordError("cuenta", friendly("cuenta", it.message)) }
+        }
+    }
+
     fun deleteGroupEverywhere(groupId: String) {
         scope.launch {
             firestore.deleteGroupTree(groupId)

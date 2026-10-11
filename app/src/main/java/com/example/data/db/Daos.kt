@@ -138,6 +138,12 @@ interface TransferAccountDao {
 
     @Update
     suspend fun updateAccount(account: TransferAccount)
+
+    @Query("SELECT * FROM transfer_accounts WHERE groupId = :groupId ORDER BY name ASC")
+    suspend fun getAccountsByGroup(groupId: String): List<TransferAccount>
+
+    @Query("DELETE FROM transfer_accounts WHERE id = :accountId")
+    suspend fun deleteAccountById(accountId: String)
 }
 
 @Dao

@@ -704,10 +704,13 @@ fun GroupScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        // IMPORTANTE: el nombre y el correo deben salir de la CUENTA
+                        // con la que se ha iniciado sesion, no del perfil local
+                        // (que puede ser el de quien creo la invitacion).
+                        val correo = googleAccountEmail
                         val nombre = inputName.ifBlank {
-                            currentMember?.name ?: currentMember?.email?.substringBefore("@") ?: "Socio"
+                            googleAccountName.ifBlank { correo.substringBefore("@") }.ifBlank { "Socio" }
                         }
-                        val correo = currentMember?.email ?: ""
                         viewModel.useInvitation(inputCode, nombre, correo) {
                             showJoinDialog = false
                         }

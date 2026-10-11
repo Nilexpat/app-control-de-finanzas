@@ -38,6 +38,14 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     private val _authenticatedUser = MutableStateFlow<com.google.firebase.auth.FirebaseUser?>(null)
     val authenticatedUser: StateFlow<com.google.firebase.auth.FirebaseUser?> = _authenticatedUser.asStateFlow()
 
+    /** Correo de la cuenta de Google con la sesion activa (no del perfil local). */
+    val googleAccountEmail: String
+        get() = _authenticatedUser.value?.email ?: ""
+
+    /** Nombre visible de la cuenta de Google con la sesion activa. */
+    val googleAccountName: String
+        get() = _authenticatedUser.value?.displayName ?: ""
+
     /** UID de la cuenta con la sesion activa. Base del filtro de privacidad. */
     private val _currentUid = MutableStateFlow<String?>(null)
 
@@ -179,6 +187,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     sync.stopWatching(groupId)
                     sync.deleteGroupEverywhere(groupId)
                 }
+                override fun onTransferAccountDeleted(accountId: String) {
+                    val gId = _selectedGroupId.value
+                    if (gId != null) sync.deleteTransferAccount(gId, accountId)
+                }
             })
         }
 
@@ -242,6 +254,16 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
             // Arrancar la sincronizacion con la nube para esta cuenta
             syncManager?.start(uid)
+
+            // Limpiar cuentas de transferencia duplicadas que pudieran existir de
+            // versiones anteriores (mismo banco repetido en la lista de pago).
+            viewModelScope.launch {
+                runCatching {
+                    repository.allGroups.first().forEach { g ->
+                        repository.dedupeTransferAccounts(g.id)
+                    }
+                }
+            }
 
             // Identidad guardada previamente en este dispositivo
             val storedId = getApplication<Application>()
@@ -794,6 +816,19 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 onSuccess()
             }.onFailure { err ->
                 showMessage(err.message ?: "Error al agregar cuenta", isError = true)
+            }
+        }
+    }
+
+    /** Elimina una cuenta de transferencia (para quitar duplicados o las que no uses). */
+    fun deleteTransferAccount(accountId: String) {
+        val user = _currentMember.value ?: return
+        viewModelScope.launch {
+            val result = repository.deleteTransferAccount(accountId, user)
+            result.onSuccess {
+                showMessage("Cuenta eliminada")
+            }.onFailure { err ->
+                showMessage(err.message ?: "Error al eliminar la cuenta", isError = true)
             }
         }
     }

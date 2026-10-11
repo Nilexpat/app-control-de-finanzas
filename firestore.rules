@@ -67,8 +67,26 @@ service cloud.firestore {
                     && request.resource.data.name is string
                     && request.resource.data.name.size() > 0;
 
-      // Solo quien ya figura como miembro puede modificar o borrar el grupo
-      allow update, delete: if isListedMember(resource.data);
+      // Permitir la modificacion si:
+      //  a) el grupo aun no tenia lista de miembros (creacion), o
+      //  b) ya figuras como miembro (el administrador gestiona la empresa), o
+      //  c) ACABAS DE CREAR TU PROPIA FICHA de socio. Este es el caso de
+      //     "unirse con un codigo": quien entra necesita poder anadirse a la
+      //     lista de acceso, y sin esta excepcion la escritura fallaba y la app
+      //     mostraba un error de conexion aunque se hubiera unido correctamente.
+      allow update: if isAuthenticated() && (
+                      !(resource.data.memberUids is list)
+                      || request.auth.uid in resource.data.memberUids
+                      || memberDocJustCreated(groupId)
+                    );
+
+      // Borrar la empresa entera queda reservado a quien figura como miembro
+      allow delete: if isListedMember(resource.data);
+
+      // Ficha propia de socio ya existente en el grupo
+      function memberDocJustCreated(groupId) {
+        return exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid));
+      }
 
       // Socios: lectura abierta a autenticados (hace falta al emparejar por
       // invitacion); escritura permitida para poder crear la propia ficha y

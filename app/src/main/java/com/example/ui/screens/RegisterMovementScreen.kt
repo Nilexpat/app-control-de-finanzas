@@ -87,8 +87,9 @@ fun RegisterMovementScreen(
         MovementType.PRESTAMO, MovementType.ABONO -> CurrencyFormatter.parseCopInput(loanAmountInput)
     }
 
-    val canSave = remember(selectedType, finalTotalCop, selectedPaymentMethod) {
-        finalTotalCop > 0 && selectedPaymentMethod != null
+    val canSave = remember(selectedType, finalTotalCop, selectedPaymentMethod, noteText) {
+        // El nombre del cliente o nota es obligatorio: identifica el movimiento
+        finalTotalCop > 0 && selectedPaymentMethod != null && noteText.isNotBlank()
     }
 
     Scaffold(
@@ -108,6 +109,9 @@ fun RegisterMovementScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
         },
+        // El Scaffold reserva espacio para el teclado (ademas de las barras del
+        // sistema). Sin esto, al escribir el teclado tapaba el campo.
+        contentWindowInsets = WindowInsets.safeDrawing,
         modifier = modifier
     ) { innerPadding ->
         LazyColumn(
@@ -480,13 +484,20 @@ fun RegisterMovementScreen(
                 }
             }
 
-            // Note / Observation
+            // Nombre del cliente o nota. Es obligatorio: identifica el movimiento
+            // y es lo que se muestra en el historial.
             item {
                 OutlinedTextField(
                     value = noteText,
                     onValueChange = { viewModel.setDraftNote(it) },
-                    label = { Text("Nota opcional / Nombre del cliente") },
-                    placeholder = { Text("Ej. Cliente Juan Pérez, pago parcial") },
+                    label = { Text("Nombre del cliente o nota *") },
+                    placeholder = { Text("Ej. Juan Pérez, pago parcial") },
+                    isError = noteText.isBlank(),
+                    supportingText = {
+                        if (noteText.isBlank()) {
+                            Text("Escribe a quién corresponde este movimiento")
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("note_input")
