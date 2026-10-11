@@ -1227,7 +1227,8 @@ class FinanceRepository(private val db: AppDatabase) {
      * anteriores, cuando cada insercion generaba un id aleatorio distinto.
      */
     suspend fun dedupeTransferAccounts(groupId: String): Int {
-        val cuentas = transferAccountDao.getAccountsByGroup(groupId).first()
+        // getAccountsByGroup ya devuelve una List (no un Flow): sin .first()
+        val cuentas = transferAccountDao.getAccountsByGroup(groupId)
         var borradas = 0
         cuentas.groupBy { it.name.trim().lowercase() }.forEach { (_, grupo) ->
             if (grupo.size <= 1) return@forEach

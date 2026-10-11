@@ -794,9 +794,9 @@ fun GroupScreen(
                         // IMPORTANTE: el nombre y el correo deben salir de la CUENTA
                         // con la que se ha iniciado sesion, no del perfil local
                         // (que puede ser el de quien creo la invitacion).
-                        val correo = googleAccountEmail
+                        val correo = viewModel.googleAccountEmail
                         val nombre = inputName.ifBlank {
-                            googleAccountName.ifBlank { correo.substringBefore("@") }.ifBlank { "Socio" }
+                            viewModel.googleAccountName.ifBlank { correo.substringBefore("@") }.ifBlank { "Socio" }
                         }
                         viewModel.useInvitation(inputCode, nombre, correo) {
                             showJoinDialog = false
