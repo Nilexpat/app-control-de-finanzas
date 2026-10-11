@@ -26,6 +26,20 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Enlace de invitacion: sociofinanzas://unirse/CODIGO
+                 Permite invitar compartiendo un enlace y que, al pulsarlo, la
+                 aplicacion se abra y rellene el codigo automaticamente. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:scheme="sociofinanzas"
+                    android:host="unirse" />
+            </intent-filter>
         </activity>
 
         <provider

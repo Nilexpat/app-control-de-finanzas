@@ -33,8 +33,7 @@ import com.example.util.CurrencyFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupScreen(
-    viewModel: FinanceViewModel,
+fun GroupScreen(    viewModel: FinanceViewModel,
     modifier: Modifier = Modifier,
     onSignOut: (() -> Unit)? = null
 ) {
@@ -60,6 +59,23 @@ fun GroupScreen(
     // pre-rellenar el nombre desde la cuenta de Google autenticada.
     var inputCode by remember { mutableStateOf("") }
     var inputName by remember { mutableStateOf("") }
+
+    // Contexto de Android, para el portapapeles y para compartir
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Codigo recibido por enlace de invitacion: abre el dialogo ya relleno
+    val pendingInviteCode by viewModel.pendingInviteCode.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingInviteCode) {
+        val codigo = pendingInviteCode
+        if (!codigo.isNullOrBlank()) {
+            inputCode = codigo
+            inputName = viewModel.googleAccountName.ifBlank {
+                viewModel.googleAccountEmail.substringBefore("@")
+            }
+            showJoinDialog = true
+            viewModel.clearPendingInviteCode()
+        }
+    }
     var selectedMemberForDetail by remember { mutableStateOf<Member?>(null) }
 
     val isAdmin = currentMember?.role == Role.ADMIN
@@ -717,6 +733,68 @@ fun GroupScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                                 )
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // Enlace de invitacion: al pulsarlo en el movil del
+                                // invitado, la app se abre con el codigo ya puesto.
+                                val enlace = "sociofinanzas://unirse/${generatedInviteCode ?: ""}"
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            copiarAlPortapapeles(context, enlace, "Enlace de invitación")
+                                        },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("copy_invite_link_btn")
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Copiar enlace", fontSize = 13.sp)
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            copiarAlPortapapeles(context, generatedInviteCode ?: "", "Código")
+                                        },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("copy_invite_code_btn")
+                                    ) {
+                                        Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Copiar código", fontSize = 13.sp)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Compartir por WhatsApp u otra app
+                                OutlinedButton(
+                                    onClick = {
+                                        val texto = "Te invito a mi empresa en SocioFinanzas. " +
+                                            "Abre este enlace para unirte: $enlace\n\n" +
+                                            "O si prefieres, usa el código: ${generatedInviteCode ?: ""}"
+                                        val sendIntent = android.content.Intent().apply {
+                                            action = android.content.Intent.ACTION_SEND
+                                            putExtra(android.content.Intent.EXTRA_TEXT, texto)
+                                            type = "text/plain"
+                                        }
+                                        context.startActivity(
+                                            android.content.Intent.createChooser(sendIntent, "Compartir invitación")
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("share_invite_btn")
+                                ) {
+                                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Compartir por WhatsApp")
+                                }
                             }
                         }
                     }
@@ -1193,4 +1271,20 @@ fun AdjustSharesDialog(
             }
         }
     )
+}
+
+/**
+ * Copia un texto al portapapeles del sistema y avisa al usuario.
+ * Se usa para el codigo y el enlace de invitacion.
+ */
+private fun copiarAlPortapapeles(
+    context: android.content.Context,
+    texto: String,
+    etiqueta: String
+) {
+    if (texto.isBlank()) return
+    val portapapeles = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+        as? android.content.ClipboardManager ?: return
+    portapapeles.setPrimaryClip(android.content.ClipData.newPlainText(etiqueta, texto))
+    android.widget.Toast.makeText(context, "$etiqueta copiado", android.widget.Toast.LENGTH_SHORT).show()
 }

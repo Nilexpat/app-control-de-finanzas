@@ -38,9 +38,25 @@ enum class MainNavTab(
 }
 
 class MainActivity : ComponentActivity() {
+
+    /**
+     * Extrae el codigo de invitacion de un enlace del tipo
+     * sociofinanzas://unirse/CODIGO
+     */
+    private fun inviteCodeFromIntent(intent: android.content.Intent?): String? {
+        val data = intent?.data ?: return null
+        if (!data.scheme.equals("sociofinanzas", ignoreCase = true)) return null
+        return data.lastPathSegment?.takeIf { it.isNotBlank() }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Codigo de invitacion con el que se abrio la aplicacion (si vino de un
+        // enlace sociofinanzas://unirse/CODIGO)
+        val inviteCodeFromLink = inviteCodeFromIntent(intent)
+
         setContent {
             SocioFinanzasTheme {
                 val authRepository = remember { AuthRepository() }
@@ -61,7 +77,17 @@ class MainActivity : ComponentActivity() {
                     val snackbarHostState = remember { SnackbarHostState() }
                     val userMessage by viewModel.userMessage.collectAsStateWithLifecycle()
                     val currentMember by viewModel.currentMember.collectAsStateWithLifecycle()
+                    val pendingInviteCode by viewModel.pendingInviteCode.collectAsStateWithLifecycle()
                     val isAdmin = currentMember?.role == com.example.data.model.Role.ADMIN
+
+                    // Enlace de invitacion: se guarda el codigo y se lleva al usuario
+                    // a la pestana Grupo, donde el dialogo aparece ya relleno.
+                    LaunchedEffect(inviteCodeFromLink) {
+                        if (!inviteCodeFromLink.isNullOrBlank()) {
+                            viewModel.onInviteLinkReceived(inviteCodeFromLink)
+                            currentTab = MainNavTab.GRUPO
+                        }
+                    }
 
                     // Se resuelve la identidad del usuario SIEMPRE al iniciar sesion,
                     // aunque todavia no tenga ninguna empresa (estado inicial vacio).

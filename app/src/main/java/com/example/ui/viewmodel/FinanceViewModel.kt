@@ -69,6 +69,21 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     private val _selectedMonthKey = MutableStateFlow(DateFormatter.currentMonthKey())
     val selectedMonthKey: StateFlow<String> = _selectedMonthKey.asStateFlow()
 
+    /**
+     * Codigo de invitacion recibido por un enlace (sociofinanzas://unirse/CODIGO).
+     * La pantalla de Grupo lo consume para abrir el dialogo ya relleno.
+     */
+    private val _pendingInviteCode = MutableStateFlow<String?>(null)
+    val pendingInviteCode: StateFlow<String?> = _pendingInviteCode.asStateFlow()
+
+    fun onInviteLinkReceived(code: String) {
+        _pendingInviteCode.value = code.trim().uppercase()
+    }
+
+    fun clearPendingInviteCode() {
+        _pendingInviteCode.value = null
+    }
+
     private val _isAccumulatedView = MutableStateFlow(false)
     val isAccumulatedView: StateFlow<Boolean> = _isAccumulatedView.asStateFlow()
 
