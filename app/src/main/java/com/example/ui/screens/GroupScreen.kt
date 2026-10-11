@@ -736,9 +736,9 @@ fun GroupScreen(    viewModel: FinanceViewModel,
 
                                 Spacer(modifier = Modifier.height(12.dp))
 
-                                // Enlace de invitacion: al pulsarlo en el movil del
-                                // invitado, la app se abre con el codigo ya puesto.
-                                val enlace = "sociofinanzas://unirse/${generatedInviteCode ?: ""}"
+                                // Enlace de invitacion web: es pulsable en WhatsApp
+                                // y, al abrirlo, la app se abre con el codigo puesto.
+                                val enlace = "https://sociofinanzas-ee539.web.app/unirse/${generatedInviteCode ?: ""}"
 
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),

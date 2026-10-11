@@ -40,13 +40,18 @@ enum class MainNavTab(
 class MainActivity : ComponentActivity() {
 
     /**
-     * Extrae el codigo de invitacion de un enlace del tipo
-     * sociofinanzas://unirse/CODIGO
+     * Extrae el codigo de invitacion de los enlaces soportados:
+     *   https://sociofinanzas-ee539.web.app/unirse/CODIGO
+     *   sociofinanzas://unirse/CODIGO
      */
     private fun inviteCodeFromIntent(intent: android.content.Intent?): String? {
         val data = intent?.data ?: return null
-        if (!data.scheme.equals("sociofinanzas", ignoreCase = true)) return null
-        return data.lastPathSegment?.takeIf { it.isNotBlank() }
+        val esquema = data.scheme?.lowercase() ?: return null
+        val soportado = esquema == "sociofinanzas" || esquema == "https" || esquema == "http"
+        if (!soportado) return null
+        // El codigo es el ultimo segmento de la ruta
+        return data.lastPathSegment
+            ?.takeIf { it.isNotBlank() && !it.equals("unirse", ignoreCase = true) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

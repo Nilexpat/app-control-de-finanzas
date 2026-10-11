@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.aistudio.sociofinanzas.kvyrtw",
+      "sha256_cert_fingerprints": [
+        "7E10E5FB62A5231DABF654FB1A504139476069A9DBBADDDB13DD856C01AFC86C"
+      ]
+    }
+  }
+]

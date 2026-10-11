@@ -27,9 +27,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Enlace de invitacion: sociofinanzas://unirse/CODIGO
-                 Permite invitar compartiendo un enlace y que, al pulsarlo, la
-                 aplicacion se abra y rellene el codigo automaticamente. -->
+            <!-- Enlace de invitacion corto (esquema propio): sociofinanzas://unirse/CODIGO -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -39,6 +37,26 @@
                 <data
                     android:scheme="sociofinanzas"
                     android:host="unirse" />
+            </intent-filter>
+
+            <!-- Enlace de invitacion web (pulsable en WhatsApp): el dominio se
+                 verifica con /.well-known/assetlinks.json alojado en el sitio.
+                 autoVerify hace que Android abra la app directamente, sin
+                 preguntar al usuario. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:scheme="https"
+                    android:host="sociofinanzas-ee539.web.app"
+                    android:pathPrefix="/unirse" />
+                <data
+                    android:scheme="https"
+                    android:host="sociofinanzas-ee539.firebaseapp.com"
+                    android:pathPrefix="/unirse" />
             </intent-filter>
         </activity>
 

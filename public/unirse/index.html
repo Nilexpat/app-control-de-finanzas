@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invitación a SocioFinanzas</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #121316;
+      color: #FFFFFF;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .tarjeta {
+      background: #18191E;
+      border: 1px solid #2A2C33;
+      border-radius: 20px;
+      padding: 28px 24px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+    }
+    h1 { font-size: 20px; margin: 0 0 6px; color: #D4F73C; }
+    p { color: #9CA3AF; font-size: 14px; line-height: 1.5; margin: 0 0 20px; }
+    .codigo {
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 5px;
+      background: #22242B;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 0 0 20px;
+      color: #FFFFFF;
+    }
+    a.boton {
+      display: block;
+      background: #D4F73C;
+      color: #121316;
+      text-decoration: none;
+      font-weight: 700;
+      padding: 15px;
+      border-radius: 12px;
+      margin-bottom: 12px;
+    }
+    button {
+      width: 100%;
+      background: transparent;
+      color: #FFFFFF;
+      border: 1px solid #3A3D45;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .aviso { color: #6B7280; font-size: 12px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="tarjeta">
+    <h1>Te invitaron a una empresa</h1>
+    <p>Abre SocioFinanzas para unirte. Si no la tienes instalada, pide el archivo APK a quien te invitó.</p>
+
+    <div class="codigo" id="codigo">······</div>
+
+    <a class="boton" id="abrir" href="#">Abrir SocioFinanzas</a>
+    <button id="copiar">Copiar código</button>
+
+    <div class="aviso" id="aviso"></div>
+  </div>
+
+  <script>
+    // El codigo es el ultimo trozo de la direccion: /unirse/CODIGO
+    var partes = window.location.pathname.split('/').filter(Boolean);
+    var codigo = (partes[partes.length - 1] || '').toUpperCase();
+
+    if (!codigo || codigo === 'UNIRSE') {
+      document.getElementById('codigo').textContent = '----';
+      document.getElementById('aviso').textContent =
+        'Este enlace no trae ningún código. Pide a quien te invitó que te lo reenvíe.';
+      document.getElementById('abrir').style.display = 'none';
+      document.getElementById('copiar').style.display = 'none';
+    } else {
+      document.getElementById('codigo').textContent = codigo;
+      // Intenta abrir la aplicacion con el esquema propio
+      document.getElementById('abrir').href = 'sociofinanzas://unirse/' + codigo;
+    }
+
+    document.getElementById('copiar').addEventListener('click', function () {
+      navigator.clipboard.writeText(codigo).then(function () {
+        document.getElementById('aviso').textContent = 'Código copiado';
+      }, function () {
+        document.getElementById('aviso').textContent =
+          'No se pudo copiar. Anota el código: ' + codigo;
+      });
+    });
+  </script>
+</body>
+</html>
