@@ -34,6 +34,13 @@ class FinanceRepository(private val db: AppDatabase) {
 
         /** Una cuenta de transferencia se ha eliminado. */
         fun onTransferAccountDeleted(accountId: String)
+
+        /**
+         * Un movimiento existente ha cambiado (editado, anulado o cambiado de
+         * medio de pago). Sin este aviso, el cambio se quedaba solo en local y
+         * la copia antigua de la nube lo sobrescribia al sincronizar.
+         */
+        fun onMovementChanged(movement: Movement)
     }
 
     private var persistenceListener: PersistenceListener? = null
@@ -44,6 +51,11 @@ class FinanceRepository(private val db: AppDatabase) {
 
     private fun notifyMovement(movement: Movement) {
         runCatching { persistenceListener?.onMovementInserted(movement) }
+    }
+
+    /** Avisa de que un movimiento ya existente cambio (edicion, anulacion, etc). */
+    private fun notifyMovementChanged(movement: Movement) {
+        runCatching { persistenceListener?.onMovementChanged(movement) }
     }
 
     private fun notifyMember(member: Member) {
@@ -369,6 +381,7 @@ class FinanceRepository(private val db: AppDatabase) {
             isEdited = true
         )
         movementDao.updateMovement(updated)
+        notifyMovementChanged(updated)
 
         return Result.success(updated)
     }
@@ -420,6 +433,7 @@ class FinanceRepository(private val db: AppDatabase) {
             annulReason = reason
         )
         movementDao.updateMovement(updated)
+        notifyMovementChanged(updated)
 
         // Notification for annulled sale or loan
         val notif = NotificationItem(
@@ -723,6 +737,7 @@ class FinanceRepository(private val db: AppDatabase) {
             isEdited = true
         )
         movementDao.updateMovement(updated)
+        notifyMovementChanged(updated)
 
         // Notification for payment method change
         val notif = NotificationItem(

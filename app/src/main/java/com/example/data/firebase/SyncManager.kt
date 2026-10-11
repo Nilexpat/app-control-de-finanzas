@@ -99,6 +99,28 @@ class SyncManager(
     private val remoteApplied = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     /**
+     * Momento de la ultima escritura local de cada movimiento.
+     *
+     * Proteccion contra datos obsoletos: al anular o editar un movimiento, la
+     * escritura tarda un instante en llegar a Firestore. Si en ese hueco llega
+     * una copia antigua desde la escucha remota, sobrescribiria el cambio local
+     * (el movimiento "revivia"). Durante esta ventana se ignora lo que venga de
+     * la nube para ese movimiento.
+     */
+    private val movimientoEscritoLocalmente = java.util.Collections.synchronizedMap(mutableMapOf<String, Long>())
+
+    private val ventanaProteccionMs = 30_000L
+
+    private fun anotarEscrituraLocal(movementId: String) {
+        movimientoEscritoLocalmente[movementId] = System.currentTimeMillis()
+    }
+
+    private fun llegaDemasiadoPronto(movementId: String): Boolean {
+        val cuando = movimientoEscritoLocalmente[movementId] ?: return false
+        return System.currentTimeMillis() - cuando < ventanaProteccionMs
+    }
+
+    /**
      * Grupos a los que ya estamos suscritos. Evita volver a descargar y a
      * enganchar escuchas duplicadas, pero garantiza que un grupo NUEVO
      * (por ejemplo tras aceptar una invitacion) se descargue entero.
@@ -227,6 +249,9 @@ class SyncManager(
             scope.launch {
                 docs.forEach { d ->
                     val m = d.toMovement()
+                    // Si acaba de escribirse en local (anulacion, edicion), se
+                    // ignora la copia remota: puede ser anterior al cambio.
+                    if (llegaDemasiadoPronto(m.id)) return@forEach
                     remoteApplied.add(m.id)
                     runCatching { db.movementDao().insertMovement(m) }
                 }
@@ -317,6 +342,7 @@ class SyncManager(
 
     fun pushMovement(movement: Movement) {
         scope.launch {
+            anotarEscrituraLocal(movement.id)
             if (!shouldPush(movement.id)) return@launch
             firestore.upsertMovement(movement)
                 .onSuccess { recordSuccess() }

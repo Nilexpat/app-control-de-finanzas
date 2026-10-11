@@ -257,13 +257,20 @@ fun GroupScreen(    viewModel: FinanceViewModel,
 
             // Metodos de pago (cuentas de transferencia). Solo el Admin puede
             // agregarlas o eliminarlas.
+            //
+            // Los colores van EXPLICITOS (fondo claro + texto oscuro) para que no
+            // dependan del tema del sistema: con el tema oscuro, el texto blanco
+            // sobre el fondo blanco de la tarjeta se perdia.
             item {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("payment_methods_card"),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = BrandSurface),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color.White,
+                        contentColor = BrandDark
+                    ),
                     border = BorderStroke(1.dp, BrandBorder)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -306,7 +313,11 @@ fun GroupScreen(    viewModel: FinanceViewModel,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text(cuenta.name, style = MaterialTheme.typography.bodyMedium)
+                                            Text(
+                                                cuenta.name,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = BrandDark
+                                            )
                                         }
                                         if (isAdmin) {
                                             IconButton(
@@ -329,13 +340,30 @@ fun GroupScreen(    viewModel: FinanceViewModel,
                             Spacer(modifier = Modifier.height(10.dp))
                             OutlinedButton(
                                 onClick = { showAddAccountDialog = true },
+                                shape = RoundedCornerShape(12.dp),
+                                // Colores fijos: texto y borde oscuros sobre el
+                                // fondo blanco de la tarjeta
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = Color.Transparent,
+                                    contentColor = BrandDark
+                                ),
+                                border = BorderStroke(1.dp, BrandBorder),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("add_account_btn")
                             ) {
-                                Icon(Icons.Default.Add, contentDescription = null)
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = null,
+                                    tint = BrandDark,
+                                    modifier = Modifier.size(18.dp)
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Agregar cuenta o banco")
+                                Text(
+                                    "Agregar cuenta o banco",
+                                    color = BrandDark,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
                         }
                     }

@@ -192,6 +192,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 override fun onGroupInserted(group: Group) = sync.pushGroup(group)
                 override fun onMemberInserted(member: Member) = sync.pushMember(member)
                 override fun onMovementInserted(movement: Movement) = sync.pushMovement(movement)
+
+                // Ediciones, anulaciones y cambios de medio de pago: sin esto el
+                // cambio se quedaba en local y la nube devolvia la version antigua.
+                override fun onMovementChanged(movement: Movement) = sync.pushMovement(movement)
                 override fun onProductInserted(product: Product) = sync.pushProduct(product)
                 override fun onTransferAccountInserted(account: TransferAccount) = sync.pushTransferAccount(account)
                 override fun onInvitationInserted(invitation: Invitation) = sync.pushInvitation(invitation)
