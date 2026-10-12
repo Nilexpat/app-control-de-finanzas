@@ -3,15 +3,17 @@ rules_version = '2';
 // Reglas de Firestore para SocioFinanzas.
 //
 // LEER ANTES DE PUBLICAR
-// Escritas pero NO probadas contra el servidor: requieren publicarse desde la
-// consola de Firebase. Si algo falla, el sintoma es "Missing or insufficient
-// permissions" en los registros de la app. Plan de despliegue recomendado:
-// publicar, registrar un movimiento, y comprobar que aparece en la consola de
-// Firestore. Si falla, volver a las reglas anteriores.
+// Estas reglas van EMPAREJADAS con la version de la app que se une a una
+// empresa con un lote atomico (FirestoreRepository.joinWithInvitation). Una app
+// anterior no podra aceptar invitaciones con estas reglas, y esta app no puede
+// aceptarlas con las reglas anteriores: hay que publicar ambas cosas a la vez.
+// Antes de publicar, comprobar en la consola que el campo `memberUids` de cada
+// empresa contiene el UID de TODOS sus socios activos: quien no figure ahi
+// pierde el acceso.
 //
 // Estructura:
 //   users/{uid}
-//   invitations/{invitationId}     -> global: permite unirse desde OTRO movil
+//   invitations/{codigo}           -> el id del documento ES el codigo
 //   groups/{groupId}               -> incluye memberUids: [uid, ...]
 //     members/{memberId}
 //     movements/{movementId}
@@ -19,17 +21,22 @@ rules_version = '2';
 //     transferAccounts/{accountId}
 //     settlements/{settlementId}
 //
-// COMPROMISO DE SEGURIDAD (documentado a proposito)
-// El documento del grupo y la coleccion de socios son legibles por cualquier
-// usuario autenticado. Es necesario porque:
-//   a) la app descubre a que empresas pertenece cada cuenta con una consulta
-//      sobre `memberUids`, y Firestore no puede filtrar listados por reglas;
-//   b) al unirse por codigo, el dispositivo nuevo debe poder leer el grupo
-//      antes de ser reconocido como miembro.
-// El riesgo real queda acotado porque el groupId es un UUID aleatorio. El
-// contenido verdaderamente sensible (movimientos, productos, cortes) exige ser
-// miembro del grupo. Cerrarlo del todo requiere mover la pertenencia a la ruta
-// del documento (groups/{groupId}/members/{uid}) y reescribir la app.
+// MODELO DE ACCESO
+// Solo quien figura en `memberUids` de la empresa puede leer o escribir la
+// empresa y su contenido. La unica puerta de entrada para alguien de fuera es
+// aceptar una invitacion valida, y debe hacerlo en UNA sola escritura atomica
+// con tres partes que se validan entre si:
+//   1. su ficha        groups/{g}/members/user_{g}_{uid}   (con `inviteCode`)
+//   2. la lista        groups/{g}.memberUids  += su uid
+//   3. la invitacion   invitations/{codigo}.usedCount += 1
+// Si falta cualquiera de las tres, o la invitacion esta caducada, revocada o
+// agotada, se rechaza el lote entero.
+//
+// LIMITACION CONOCIDA
+// Dentro de una empresa, las reglas no distinguen administrador de socio: los
+// permisos por rol los aplica la app. Un socio con un cliente modificado podria
+// saltarselos. Cerrarlo exige guardar los administradores en el documento del
+// grupo (por ejemplo `adminUids`).
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -38,11 +45,31 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // El usuario autenticado pertenece al grupo segun su lista memberUids
+    function groupPath(groupId) {
+      return /databases/$(database)/documents/groups/$(groupId);
+    }
+
+    function invitationPath(code) {
+      return /databases/$(database)/documents/invitations/$(code);
+    }
+
+    // El usuario autenticado figura en la lista de acceso de esos datos de grupo
     function isListedMember(groupData) {
       return isAuthenticated()
              && groupData.memberUids is list
              && request.auth.uid in groupData.memberUids;
+    }
+
+    // Pertenece al grupo segun lo que hay guardado AHORA en el servidor
+    function isGroupMember(groupId) {
+      return isAuthenticated() && isListedMember(get(groupPath(groupId)).data);
+    }
+
+    // No pertenecia al grupo y, al terminar esta misma escritura, si pertenece
+    function isEnteringGroup(groupId) {
+      return isAuthenticated()
+             && !isListedMember(get(groupPath(groupId)).data)
+             && isListedMember(getAfter(groupPath(groupId)).data);
     }
 
     // --- Perfil de usuario ---
@@ -51,83 +78,112 @@ service cloud.firestore {
     }
 
     // --- Invitaciones ---
-    // El codigo de 8 caracteres (32^8 combinaciones) hace de secreto.
-    match /invitations/{invitationId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated();
-      allow delete: if false;  // se limpian desde el servidor al borrar el grupo
+    // El codigo de 8 caracteres (32^8 combinaciones) hace de secreto y es el id
+    // del documento: quien lo conoce puede leer ESA invitacion, pero nadie de
+    // fuera puede listar las invitaciones de una empresa.
+    match /invitations/{code} {
+      allow get: if isAuthenticated();
+      allow list: if isGroupMember(resource.data.groupId);
+
+      allow create: if isGroupMember(request.resource.data.groupId)
+                    && request.resource.data.code == code
+                    && request.resource.data.usedCount == 0;
+
+      allow update: if (isGroupMember(resource.data.groupId)
+                        && request.resource.data.groupId == resource.data.groupId
+                        && request.resource.data.code == resource.data.code)
+                    || isConsumingInvitation();
+
+      allow delete: if isGroupMember(resource.data.groupId);
+
+      // Parte 3 de la union: un no-miembro gasta UN uso de una invitacion
+      // vigente, y solo si en esta misma escritura entra en la empresa.
+      function isConsumingInvitation() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedCount'])
+               && request.resource.data.usedCount == resource.data.usedCount + 1
+               && resource.data.usedCount < resource.data.maxUses
+               && resource.data.isRevoked != true
+               && request.time.toMillis() < resource.data.expiresAt
+               && isEnteringGroup(resource.data.groupId);
+      }
     }
 
     // --- Grupos ---
     match /groups/{groupId} {
-      // Lectura necesaria para descubrir las empresas propias (ver nota arriba)
-      allow read: if isAuthenticated();
+      // La consulta `whereArrayContains("memberUids", uid)` de la app cumple
+      // esta condicion, asi que cada cuenta sigue descubriendo sus empresas.
+      // Se escribe sin `is list` a proposito: con esa comprobacion Firestore
+      // no sabe validar la consulta y la rechaza entera.
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.memberUids;
 
-      allow create: if isAuthenticated()
+      // Quien crea la empresa debe figurar en ella desde el principio
+      allow create: if isListedMember(request.resource.data)
                     && request.resource.data.name is string
                     && request.resource.data.name.size() > 0;
 
-      // Permitir la modificacion si:
-      //  a) el grupo aun no tenia lista de miembros (creacion), o
-      //  b) ya figuras como miembro (el administrador gestiona la empresa), o
-      //  c) ACABAS DE CREAR TU PROPIA FICHA de socio. Este es el caso de
-      //     "unirse con un codigo": quien entra necesita poder anadirse a la
-      //     lista de acceso, y sin esta excepcion la escritura fallaba y la app
-      //     mostraba un error de conexion aunque se hubiera unido correctamente.
-      allow update: if isAuthenticated() && (
-                      !(resource.data.memberUids is list)
-                      || request.auth.uid in resource.data.memberUids
-                      || existeMiFicha(groupId)
-                    );
+      allow update: if isListedMember(resource.data) || isJoining();
 
-      // Borrar la empresa entera queda reservado a quien figura como miembro
       allow delete: if isListedMember(resource.data);
 
-      // Ficha propia de socio ya existente en el grupo
-      function existeMiFicha(groupId) {
-        return exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid));
+      // Parte 2 de la union: un no-miembro solo puede anadirse A SI MISMO a la
+      // lista, sin tocar nada mas, y solo si esta misma escritura deja su ficha
+      // activa y gasta un uso de la invitacion con la que entra.
+      function isJoining() {
+        let fichaPath = /databases/$(database)/documents/groups/$(groupId)/members/$("user_" + groupId + "_" + request.auth.uid);
+        let ficha = getAfter(fichaPath).data;
+        let invitacionAntes = get(invitationPath(ficha.inviteCode)).data;
+        let invitacionDespues = getAfter(invitationPath(ficha.inviteCode)).data;
+        return isAuthenticated()
+               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
+               && !(request.auth.uid in resource.data.memberUids)
+               && request.auth.uid in request.resource.data.memberUids
+               && request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1
+               && request.resource.data.memberUids.hasAll(resource.data.memberUids)
+               && ficha.googleUid == request.auth.uid
+               && ficha.active == true
+               && invitacionAntes.groupId == groupId
+               && invitacionDespues.usedCount == invitacionAntes.usedCount + 1;
       }
 
-      // Socios: lectura abierta a autenticados (hace falta al emparejar por
-      // invitacion); escritura permitida para poder crear la propia ficha y
-      // para que el admin gestione porcentajes, roles y bajas.
       match /members/{memberId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated();
-        allow delete: if isAuthenticated();
+        allow read, delete: if isGroupMember(groupId);
+        allow create, update: if isGroupMember(groupId) || isOwnJoinFicha();
+
+        // Parte 1 de la union: la ficha propia, con el id que usa la app, el
+        // rol que concede la invitacion y los valores iniciales de un socio
+        // nuevo (20% y sin deuda: los mismos que pone buildInvitedMember).
+        function isOwnJoinFicha() {
+          let ficha = request.resource.data;
+          let invitacion = get(invitationPath(ficha.inviteCode)).data;
+          return isAuthenticated()
+                 && memberId == "user_" + groupId + "_" + request.auth.uid
+                 && ficha.id == memberId
+                 && ficha.groupId == groupId
+                 && ficha.googleUid == request.auth.uid
+                 && ficha.active == true
+                 && ficha.sharePercentCentecimas == 2000
+                 && ficha.initialDebtCop == 0
+                 && invitacion.groupId == groupId
+                 && ficha.role == invitacion.role
+                 && isEnteringGroup(groupId);
+        }
       }
 
-      // Contenido financiero del grupo.
-      //
-      // LIMITACION CONOCIDA Y ACEPTADA (pendiente): la lectura y la escritura
-      // estan permitidas a cualquier usuario autenticado. Con las reglas de
-      // Firestore NO se puede exigir pertenencia al grupo sin provocar lecturas
-      // denegadas, porque el documento del grupo y la lista de socios tienen que
-      // poder leerse antes de que exista la pertenencia (emparejamiento por
-      // invitacion). La unica forma de cerrarlo es mover la pertenencia a la ruta
-      // del documento, por ejemplo groups/{groupId}/members/{uid}, y reescribir
-      // la app para trabajar sobre esa estructura.
-      //
-      // Lo que SI esta cerrado: el acceso sin autenticar y el borrado del grupo
-      // completo, que exige figurar en memberUids.
+      // Contenido financiero: solo miembros de la empresa
       match /movements/{movementId} {
-        allow read, create, update: if isAuthenticated();
-        allow delete: if isAuthenticated();
+        allow read, write: if isGroupMember(groupId);
       }
 
       match /products/{productId} {
-        allow read, create, update: if isAuthenticated();
-        allow delete: if isAuthenticated();
+        allow read, write: if isGroupMember(groupId);
       }
 
       match /transferAccounts/{accountId} {
-        allow read, create, update: if isAuthenticated();
-        allow delete: if isAuthenticated();
+        allow read, write: if isGroupMember(groupId);
       }
 
       match /settlements/{settlementId} {
-        allow read, create, update: if isAuthenticated();
-        allow delete: if isAuthenticated();
+        allow read, write: if isGroupMember(groupId);
       }
     }
   }

@@ -11,8 +11,10 @@ import com.example.data.model.Settlement
 import com.example.data.model.TransferAccount
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -28,15 +30,10 @@ import kotlinx.coroutines.tasks.await
  *     documento que llega se escribe en Room, y los Flows de Room refrescan la UI
  *     solos. No hace falta tocar las pantallas.
  *
- * Prevencion de bucles: las escrituras que vienen de la nube se registran en
- * `remoteApplied`. Si el mismo id intenta subirse justo despues, se descarta una
- * vez. Asi un cambio remoto no rebota de vuelta a Firestore.
+ * Las lecturas remotas se aplican directamente a Room y solo las escrituras
+ * explicitas del repositorio se suben a Firestore. Los cambios locales de un
+ * mismo registro prevalecen al sincronizar para no restaurar versiones antiguas.
  *
- * Resolucion de conflictos: last-write-wins por id. El documento remoto se aplica
- * solo si no existe una copia local mas reciente (se compara `updatedAt` remoto
- * con la marca local cuando esta disponible). Para dos personas registrando
- * movimientos distintos no hay conflicto real, porque cada movimiento tiene id
- * propio generado en el dispositivo que lo crea.
  */
 class SyncManager(
     context: Context,
@@ -95,30 +92,76 @@ class SyncManager(
         }
     }
 
-    /** Ids que acaban de llegar de la nube y no deben reenviarse. */
-    private val remoteApplied = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
     /**
-     * Momento de la ultima escritura local de cada movimiento.
+     * Momento de la ultima escritura local de cada cosa que el usuario cambia
+     * desde la app (movimientos y socios), identificada por su id.
      *
-     * Proteccion contra datos obsoletos: al anular o editar un movimiento, la
-     * escritura tarda un instante en llegar a Firestore. Si en ese hueco llega
-     * una copia antigua desde la escucha remota, sobrescribiria el cambio local
-     * (el movimiento "revivia"). Durante esta ventana se ignora lo que venga de
-     * la nube para ese movimiento.
+     * Proteccion contra datos obsoletos. La causa de que una anulacion "reviviera"
+     * o de que un socio desvinculado reapareciera era esta secuencia:
+     *
+     *   1. Anulas el movimiento -> se guarda en local, pero la nube aun tiene la
+     *      version activa.
+     *   2. Esa version activa vuelve (por la escucha o al abrir la app) y pisa la
+     *      anulacion.
+     *
+     * Con esta marca, se ignora lo que llega de la nube para ese id durante un
+     * margen suficientemente amplio. Es un margen generoso a proposito: cerrar y
+     * abrir la aplicacion tarda menos que ese tiempo, que era el caso reportado.
+     * Si el cambio lo hizo el OTRO movil, tambien se respeta mientras el margen
+     * este activo en este; para dos personas editando el mismo registro a la vez
+     * es un caso muy improbable.
      */
-    private val movimientoEscritoLocalmente = java.util.Collections.synchronizedMap(mutableMapOf<String, Long>())
+    private val escrituraLocal = java.util.Collections.synchronizedMap(mutableMapOf<String, Long>())
 
-    private val ventanaProteccionMs = 30_000L
+    private val ventanaProteccionMs = 15 * 60_000L
 
-    private fun anotarEscrituraLocal(movementId: String) {
-        movimientoEscritoLocalmente[movementId] = System.currentTimeMillis()
+    private fun anotarEscrituraLocal(id: String) {
+        escrituraLocal[id] = System.currentTimeMillis()
     }
 
-    private fun llegaDemasiadoPronto(movementId: String): Boolean {
-        val cuando = movimientoEscritoLocalmente[movementId] ?: return false
+    private fun llegaDemasiadoPronto(id: String): Boolean {
+        val cuando = escrituraLocal[id] ?: return false
         return System.currentTimeMillis() - cuando < ventanaProteccionMs
     }
+
+    /**
+     * Cola de subidas: las escrituras salen hacia Firestore en el MISMO orden
+     * en que el repositorio las pide.
+     *
+     * Hace falta porque las reglas de seguridad solo aceptan contenido de una
+     * empresa que ya existe y de la que eres miembro. Al crear una empresa, el
+     * grupo tiene que salir antes que la ficha del administrador y las cuentas;
+     * si cada subida fuera en su propia corrutina, el orden seria aleatorio y
+     * Firebase rechazaria las que se adelantaran.
+     *
+     * Solo se ordena el ENVIO, no se espera la confirmacion de cada una: asi,
+     * sin conexion, todas quedan encoladas en Firestore igual que antes.
+     */
+    private val colaSubidas = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for (tarea in colaSubidas) {
+                runCatching { tarea() }.onFailure { Log.w(TAG, "subida: ${it.message}") }
+            }
+        }
+    }
+
+    /** Ejecuta la tarea cuando hayan salido todas las subidas anteriores. */
+    private fun encolar(tarea: suspend () -> Unit) {
+        colaSubidas.trySend(tarea)
+    }
+
+    /**
+     * Lanza la escritura sin esperar su confirmacion. UNDISPATCHED hace que la
+     * llamada a Firestore se ejecute aqui mismo, antes de pasar a la siguiente
+     * tarea de la cola; lo unico que queda en segundo plano es la espera.
+     */
+    private fun emitir(escritura: suspend () -> Unit) {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { escritura() }
+    }
+
+    private fun subir(escritura: suspend () -> Unit) = encolar { emitir(escritura) }
 
     /**
      * Grupos a los que ya estamos suscritos. Evita volver a descargar y a
@@ -148,10 +191,20 @@ class SyncManager(
             // Descubrir grupos nuevos (por ejemplo tras aceptar una invitacion).
             // Se comprueba `watching` y no la base local: al unirse por codigo ya
             // puede existir una ficha de miembro sin que el grupo este descargado.
-            listenersGlobales += firestore.listenUserGroups(userId) { ids ->
+            listenersGlobales += firestore.listenUserGroups(userId) { ids, confirmadoPorServidor ->
                 scope.launch {
                     ids.forEach { id ->
                         if (!watching.contains(id)) pullGroup(id)
+                    }
+                    // Empresas que seguia y en las que el servidor ya no me
+                    // lista: me retiraron o sali. Las reglas me cortan la
+                    // lectura del grupo, asi que esta es la senal fiable. Solo
+                    // se actua con respuesta del servidor: la cache puede venir
+                    // incompleta y no debe hacer desaparecer empresas.
+                    if (confirmadoPorServidor) {
+                        synchronized(watching) { watching.toList() }
+                            .filter { it !in ids }
+                            .forEach { perderAcceso(it) }
                     }
                 }
             }
@@ -191,24 +244,28 @@ class SyncManager(
                 }
             }
 
+            // AL BAJAR, se ignora lo que el usuario acaba de cambiar en local.
+            // Sin esta proteccion, la copia antigua de la nube pisaba la
+            // anulacion de un movimiento o resucitaba a un socio desvinculado
+            // cada vez que se abria la aplicacion.
             firestore.fetchMembers(groupId).getOrNull()?.forEach { m ->
-                remoteApplied.add(m.id)
+                if (llegaDemasiadoPronto(m.id)) return@forEach
                 db.memberDao().insertMember(m)
             }
             firestore.fetchMovements(groupId).getOrNull()?.forEach { m ->
-                remoteApplied.add(m.id)
+                if (llegaDemasiadoPronto(m.id)) return@forEach
                 db.movementDao().insertMovement(m)
             }
             firestore.fetchProducts(groupId).getOrNull()?.forEach { p ->
-                remoteApplied.add(p.id)
+                if (llegaDemasiadoPronto(p.id)) return@forEach
                 db.productDao().insertProduct(p)
             }
             firestore.fetchTransferAccounts(groupId).getOrNull()?.forEach { a ->
-                remoteApplied.add(a.id)
+                if (llegaDemasiadoPronto(a.id)) return@forEach
                 db.transferAccountDao().insertAccount(a)
             }
             firestore.fetchSettlements(groupId).getOrNull()?.forEach { s ->
-                remoteApplied.add(s.id)
+                if (llegaDemasiadoPronto(s.id)) return@forEach
                 db.settlementDao().insertSettlement(s)
             }
             attachListeners(groupId)
@@ -228,9 +285,7 @@ class SyncManager(
                 // desaparece tambien en este dispositivo. Cubre el caso de que el
                 // movil estuviera cerrado en el momento de la retirada.
                 if (yo != null && remoto.memberUids.isNotEmpty() && !remoto.memberUids.contains(yo)) {
-                    db.groupDao().deleteGroupById(groupId)
-                    stopWatching(groupId)
-                    Log.d(TAG, "Salida detectada en $groupId: se deja de sincronizar")
+                    perderAcceso(groupId)
                     return@launch
                 }
                 runCatching { db.groupDao().insertGroup(remoto) }
@@ -240,7 +295,9 @@ class SyncManager(
             scope.launch {
                 docs.forEach { d ->
                     val m = d.toMember()
-                    remoteApplied.add(m.id)
+                    // Ignora la copia antigua de un socio recien desvinculado:
+                    // es lo que impedia que reapareciera al reabrir la app
+                    if (llegaDemasiadoPronto(m.id)) return@forEach
                     runCatching { db.memberDao().insertMember(m) }
                 }
             }
@@ -252,7 +309,6 @@ class SyncManager(
                     // Si acaba de escribirse en local (anulacion, edicion), se
                     // ignora la copia remota: puede ser anterior al cambio.
                     if (llegaDemasiadoPronto(m.id)) return@forEach
-                    remoteApplied.add(m.id)
                     runCatching { db.movementDao().insertMovement(m) }
                 }
             }
@@ -261,7 +317,7 @@ class SyncManager(
             scope.launch {
                 docs.forEach { d ->
                     val p = d.toProduct()
-                    remoteApplied.add(p.id)
+                    if (llegaDemasiadoPronto(p.id)) return@forEach
                     runCatching { db.productDao().insertProduct(p) }
                 }
             }
@@ -270,7 +326,7 @@ class SyncManager(
             scope.launch {
                 docs.forEach { d ->
                     val a = d.toTransferAccount()
-                    remoteApplied.add(a.id)
+                    if (llegaDemasiadoPronto(a.id)) return@forEach
                     runCatching { db.transferAccountDao().insertAccount(a) }
                 }
             }
@@ -279,7 +335,7 @@ class SyncManager(
             scope.launch {
                 docs.forEach { d ->
                     val s = d.toSettlement()
-                    remoteApplied.add(s.id)
+                    if (llegaDemasiadoPronto(s.id)) return@forEach
                     runCatching { db.settlementDao().insertSettlement(s) }
                 }
             }
@@ -288,28 +344,32 @@ class SyncManager(
 
     // ------------------------------------------------------------- subidas
 
-    /** Devuelve true si hay que subir el cambio (no vino de la nube). */
-    private fun shouldPush(id: String): Boolean = !remoteApplied.remove(id)
-
+    /** Sube el grupo y su lista de UIDs de miembro. */
     fun pushGroup(group: Group) {
-        scope.launch {
-            if (!shouldPush("group_${group.id}")) return@launch
-            pushGroupNow(group)
+        encolar {
+            // Solo los socios ACTIVOS tienen acceso. Al desactivar a alguien, su UID
+            // desaparece de esta lista y deja de recibir la empresa en su movil.
+            val members = runCatching { db.memberDao().getActiveMembersByGroup(group.id).first() }
+                .getOrElse { emptyList() }
+            val memberUids = members.mapNotNull { it.googleUid.ifBlank { null } }
+            val currentUid = currentUserIdProvider()
+            val uids = if (currentUid != null && currentUid !in memberUids) memberUids + currentUid else memberUids
+            emitir {
+                firestore.upsertGroup(group, uids)
+                    .onSuccess { recordSuccess() }
+                    .onFailure { recordError("empresa", friendly("empresa", it.message)) }
+            }
         }
     }
 
-    /** Sube el grupo y su lista de UIDs de miembro (version suspendida). */
-    suspend fun pushGroupNow(group: Group) {
-        // Solo los socios ACTIVOS tienen acceso. Al desactivar a alguien, su UID
-        // desaparece de esta lista y deja de recibir la empresa en su movil.
-        val members = runCatching { db.memberDao().getActiveMembersByGroup(group.id).first() }
-            .getOrElse { emptyList() }
-        val memberUids = members.mapNotNull { it.googleUid.ifBlank { null } }
-        val currentUid = currentUserIdProvider()
-        val uids = if (currentUid != null && currentUid !in memberUids) memberUids + currentUid else memberUids
-        firestore.upsertGroup(group, uids)
-            .onSuccess { recordSuccess() }
-            .onFailure { recordError("empresa", friendly("empresa", it.message)) }
+    /**
+     * El servidor ya no me reconoce como miembro de esta empresa: desaparece
+     * de este dispositivo y se deja de sincronizar.
+     */
+    private suspend fun perderAcceso(groupId: String) {
+        runCatching { db.groupDao().deleteGroupById(groupId) }
+        stopWatching(groupId)
+        Log.d(TAG, "Salida detectada en $groupId: se deja de sincronizar")
     }
 
     /**
@@ -327,13 +387,13 @@ class SyncManager(
     }
 
     fun pushMember(member: Member) {
-        scope.launch {
-            if (!shouldPush(member.id)) return@launch
+        anotarEscrituraLocal(member.id)
+        subir {
             firestore.upsertMember(member)
                 .onSuccess { recordSuccess() }
                 .onFailure { recordError("socio", friendly("socio", it.message)) }
             // Mantener la lista de miembros del grupo al dia
-            if (member.googleUid.isNotBlank()) {
+            if (member.active && member.googleUid.isNotBlank()) {
                 firestore.addMemberUid(member.groupId, member.googleUid)
                     .onFailure { recordError("lista de socios", friendly("lista de socios", it.message)) }
             }
@@ -341,9 +401,8 @@ class SyncManager(
     }
 
     fun pushMovement(movement: Movement) {
-        scope.launch {
-            anotarEscrituraLocal(movement.id)
-            if (!shouldPush(movement.id)) return@launch
+        anotarEscrituraLocal(movement.id)
+        subir {
             firestore.upsertMovement(movement)
                 .onSuccess { recordSuccess() }
                 .onFailure { recordError("movimiento", friendly("movimiento", it.message)) }
@@ -351,8 +410,8 @@ class SyncManager(
     }
 
     fun pushProduct(product: Product) {
-        scope.launch {
-            if (!shouldPush(product.id)) return@launch
+        anotarEscrituraLocal(product.id)
+        subir {
             firestore.upsertProduct(product)
                 .onSuccess { recordSuccess() }
                 .onFailure { recordError("producto", friendly("producto", it.message)) }
@@ -360,8 +419,8 @@ class SyncManager(
     }
 
     fun pushTransferAccount(account: TransferAccount) {
-        scope.launch {
-            if (!shouldPush(account.id)) return@launch
+        anotarEscrituraLocal(account.id)
+        subir {
             firestore.upsertTransferAccount(account)
                 .onSuccess { recordSuccess() }
                 .onFailure { recordError("cuenta", friendly("cuenta", it.message)) }
@@ -369,8 +428,8 @@ class SyncManager(
     }
 
     fun pushSettlement(settlement: Settlement) {
-        scope.launch {
-            if (!shouldPush(settlement.id)) return@launch
+        anotarEscrituraLocal(settlement.id)
+        subir {
             firestore.upsertSettlement(settlement)
                 .onSuccess { recordSuccess() }
                 .onFailure { recordError("corte", friendly("corte", it.message)) }
@@ -378,8 +437,7 @@ class SyncManager(
     }
 
     fun pushInvitation(invitation: com.example.data.model.Invitation) {
-        scope.launch {
-            if (!shouldPush(invitation.id)) return@launch
+        subir {
             firestore.upsertInvitation(invitation)
                 .onSuccess { recordSuccess() }
                 .onFailure { recordError("invitación", friendly("invitación", it.message)) }
@@ -388,7 +446,7 @@ class SyncManager(
 
     /** Elimina una cuenta de transferencia tambien en la nube. */
     fun deleteTransferAccount(groupId: String, accountId: String) {
-        scope.launch {
+        subir {
             firestore.deleteTransferAccount(groupId, accountId)
                 .onSuccess { recordSuccess() }
                 .onFailure { recordError("cuenta", friendly("cuenta", it.message)) }
@@ -396,20 +454,24 @@ class SyncManager(
     }
 
     fun deleteGroupEverywhere(groupId: String) {
-        scope.launch {
-            firestore.deleteGroupTree(groupId)
-                .onFailure { recordError("borrado de empresa", friendly("borrado", it.message)) }
+        subir {
+            // Primero las invitaciones: las reglas solo dejan borrarlas a un
+            // miembro, y eso deja de poder comprobarse al borrar el grupo.
             firestore.deleteInvitationsForGroup(groupId)
                 .onFailure { recordError("borrado de invitaciones", friendly("borrado", it.message)) }
+            firestore.deleteGroupTree(groupId)
+                .onFailure { recordError("borrado de empresa", friendly("borrado", it.message)) }
         }
     }
 
     /**
      * Sincroniza en Firestore la lista de UIDs con acceso a la empresa.
-     * Se llama cuando alguien crea una empresa o acepta una invitacion.
+     * Se llama cuando alguien crea una empresa, o cuando un socio sale o es
+     * retirado. Aceptar una invitacion NO pasa por aqui: esa union la hace
+     * FirestoreRepository.joinWithInvitation en una sola escritura atomica.
      */
     fun pushMembership(groupId: String, memberUids: List<String>) {
-        scope.launch {
+        subir {
             firestore.setGroupMemberUids(groupId, memberUids)
                 .onSuccess { recordSuccess() }
                 .onFailure { recordError("miembros de la empresa", friendly("miembros", it.message)) }

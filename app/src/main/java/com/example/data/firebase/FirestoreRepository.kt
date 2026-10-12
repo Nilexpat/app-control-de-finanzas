@@ -14,7 +14,9 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.tasks.await
 
 /**
@@ -22,9 +24,10 @@ import kotlinx.coroutines.tasks.await
  *
  * Estructura en Firestore:
  *   users/{uid}                                  -> perfil
- *   invitations/{invitationId}                   -> coleccion global, permite
+ *   invitations/{codigo}                         -> coleccion global, permite
  *                                                   unirse por codigo desde otro
- *                                                   dispositivo
+ *                                                   dispositivo. El id del
+ *                                                   documento es el codigo
  *   groups/{groupId}                             -> incluye memberUids (array)
  *     members/{memberId}
  *     movements/{movementId}
@@ -144,10 +147,35 @@ class FirestoreRepository(
             .set(settlement.toFirestore(), SetOptions.merge()).await()
     }.map { }.onFailure { Log.w(TAG, "upsertSettlement(${settlement.id}): ${it.message}") }
 
+    // El documento se guarda bajo el CODIGO: las reglas dejan leer una invitacion
+    // concreta a quien conoce su codigo, pero no listar las de una empresa.
     suspend fun upsertInvitation(invitation: Invitation): Result<Unit> = runCatching {
-        invitationsCol.document(invitation.id)
+        invitationsCol.document(invitation.code)
             .set(invitation.toFirestore(), SetOptions.merge()).await()
     }.map { }.onFailure { Log.w(TAG, "upsertInvitation(${invitation.id}): ${it.message}") }
+
+    /**
+     * Une a un socio nuevo a la empresa gastando una invitacion.
+     *
+     * Las tres escrituras van en UN lote atomico porque las reglas de seguridad
+     * las validan entre si: quien aun no es miembro solo puede crear su ficha,
+     * anadirse a `memberUids` y gastar un uso de la invitacion si hace las tres
+     * cosas a la vez y la invitacion sigue vigente. Por separado se rechazan.
+     * `inviteCode` en la ficha es lo que le dice a las reglas con que invitacion
+     * se entra.
+     */
+    suspend fun joinWithInvitation(invitation: Invitation, member: Member): Result<Unit> = runCatching {
+        val groupRef = groupsCol.document(invitation.groupId)
+        val batch = db.batch()
+        batch.set(
+            groupRef.collection("members").document(member.id),
+            member.toFirestore() + ("inviteCode" to invitation.code),
+            SetOptions.merge()
+        )
+        batch.update(groupRef, "memberUids", FieldValue.arrayUnion(member.googleUid))
+        batch.update(invitationsCol.document(invitation.code), "usedCount", FieldValue.increment(1))
+        batch.commit().await()
+    }.map { }.onFailure { Log.w(TAG, "joinWithInvitation(${invitation.groupId}): ${it.message}") }
 
     /** Anade un UID a la lista de miembros del grupo (arrayUnion es idempotente). */
     suspend fun addMemberUid(groupId: String, userId: String): Result<Unit> = runCatching {
@@ -223,15 +251,14 @@ class FirestoreRepository(
      * Busca una invitacion por su codigo en la coleccion global.
      * Esto es lo que permite unirse desde OTRO dispositivo: el movil nuevo no
      * tiene la invitacion en su base local, asi que la busca en la nube.
+     *
+     * Se pide al SERVIDOR, sin cache: hacen falta los usos y la caducidad al
+     * dia, y sin conexion es mejor fallar aqui que dejar la union a medias.
      */
     suspend fun findInvitationByCode(code: String): Result<Invitation?> = runCatching {
-        invitationsCol
-            .whereEqualTo("code", code.trim().uppercase())
-            .limit(1)
-            .get().await()
-            .documents
-            .firstOrNull()
-            ?.data
+        invitationsCol.document(code.trim().uppercase())
+            .get(Source.SERVER).await()
+            .data
             ?.toInvitation()
     }.onFailure { Log.w(TAG, "findInvitationByCode: ${it.message}") }
 
@@ -270,16 +297,29 @@ class FirestoreRepository(
             snapshot?.data?.let(onChange)
         }
 
-    /** Escucha las empresas a las que pertenece el usuario (para descubrir grupos nuevos). */
-    fun listenUserGroups(userId: String, onChange: (List<String>) -> Unit): ListenerRegistration =
+    /**
+     * Escucha las empresas a las que pertenece el usuario (para descubrir grupos
+     * nuevos y para enterarse de que ya no figura en alguno).
+     *
+     * El segundo dato del aviso indica si la lista viene confirmada por el
+     * servidor o solo de la cache local. Se escuchan tambien los cambios de
+     * metadatos para recibir ese aviso confirmado aunque la lista no cambie.
+     */
+    fun listenUserGroups(
+        userId: String,
+        onChange: (ids: List<String>, confirmadoPorServidor: Boolean) -> Unit
+    ): ListenerRegistration =
         groupsCol.whereArrayContains("memberUids", userId)
-            .addSnapshotListener { snapshot, error ->
+            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
                 if (error != null) {
                     Log.w(TAG, "listener grupos de $userId: ${error.message}")
                     return@addSnapshotListener
                 }
                 if (snapshot == null) return@addSnapshotListener
-                onChange(snapshot.documents.mapNotNull { it.getString("id") ?: it.id })
+                onChange(
+                    snapshot.documents.mapNotNull { it.getString("id") ?: it.id },
+                    !snapshot.metadata.isFromCache && !snapshot.metadata.hasPendingWrites()
+                )
             }
 
     /** Escucha invitaciones nuevas para un grupo (para que el admin vea el uso). */

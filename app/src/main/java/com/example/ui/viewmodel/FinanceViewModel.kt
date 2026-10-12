@@ -218,6 +218,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         repository.cloudInvitationLookup = { code ->
             firestoreRepository.findInvitationByCode(code).getOrNull()
         }
+        repository.cloudJoin = { invitation, member ->
+            firestoreRepository.joinWithInvitation(invitation, member)
+        }
 
         // Mostrar en pantalla los fallos de sincronizacion. Antes se perdian en
         // el registro y la app parecia funcionar mientras no sincronizaba nada.

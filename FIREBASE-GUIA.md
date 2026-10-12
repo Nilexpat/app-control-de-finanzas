@@ -100,10 +100,21 @@ Despues de publicar, comprueba que la app sigue funcionando:
 - **Si NO aparece y en la app hay errores de permisos** -> vuelve a la pestana
   Reglas y restaura las anteriores. Avisa y se corrigen.
 
-> Las reglas actuales son mas restrictivas que las originales, pero tienen una
-> limitacion conocida: la lectura de movimientos sigue abierta a cualquier
-> usuario autenticado. Esta explicado dentro del propio archivo. Cerrarlo del
-> todo exige cambiar la estructura de datos.
+> Con estas reglas solo los miembros de una empresa (los UID que figuran en su
+> campo `memberUids`) pueden leer o escribir sus datos, y la unica forma de
+> entrar es aceptar una invitacion vigente. Tres cosas a tener en cuenta:
+>
+> - **Antes de publicar**, ejecuta `probar-reglas.cmd`: prueba las reglas en un
+>   emulador local, sin tocar tu proyecto. Tiene que terminar con `0 fallos`.
+> - **Antes de publicar**, revisa en **Datos -> groups** que `memberUids` de cada
+>   empresa contiene el UID de todos sus socios activos. Quien no figure pierde
+>   el acceso (se arregla anadiendo su UID a mano en la consola).
+> - Las reglas van emparejadas con la version de la app: publica las reglas y
+>   actualiza la app en todos los moviles a la vez. Las invitaciones creadas con
+>   la version anterior dejan de servir; hay que generar otras.
+>
+> Limitacion conocida: dentro de una empresa las reglas no distinguen
+> administrador de socio; eso lo sigue aplicando la app.
 
 ---
 

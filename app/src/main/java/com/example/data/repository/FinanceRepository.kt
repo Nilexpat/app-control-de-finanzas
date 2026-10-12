@@ -994,11 +994,14 @@ class FinanceRepository(private val db: AppDatabase) {
 
         memberDao.updateMember(yo.copy(active = false))
 
+        // La ficha inactiva se sube ANTES de quitarse de la lista de acceso:
+        // despues ya no se es miembro y Firebase rechazaria la escritura. Por lo
+        // mismo no se reenvia el grupo, que ademas volveria a incluir a quien sale.
+        notifyMember(yo.copy(active = false))
+
         val sinMi = (groupDao.getGroupById(groupId)?.memberUids ?: emptyList())
             .filter { it != yo.googleUid }
         setGroupMemberUids(groupId, sinMi)
-        notifyGroup(groupDao.getGroupById(groupId) ?: return Result.success(Unit))
-        notifyMember(yo.copy(active = false))
 
         return Result.success(Unit)
     }
@@ -1026,6 +1029,9 @@ class FinanceRepository(private val db: AppDatabase) {
         }
         val code = generateInviteCode()
         val invitation = Invitation(
+            // El id es el propio codigo: en la nube el documento se guarda bajo
+            // el codigo, que es lo que permite leerlo solo a quien lo conoce.
+            id = code,
             groupId = groupId,
             code = code,
             role = role,
@@ -1058,6 +1064,15 @@ class FinanceRepository(private val db: AppDatabase) {
      */
     var cloudInvitationLookup: (suspend (String) -> Invitation?)? = null
 
+    /**
+     * Completa la union en la nube: ficha del socio, lista de acceso y uso de
+     * la invitacion en UNA escritura atomica. Lo inyecta la capa de
+     * sincronizacion. Las reglas de seguridad solo dejan entrar a alguien de
+     * fuera de esta forma, asi que la union no puede hacerse con las subidas
+     * sueltas de siempre.
+     */
+    var cloudJoin: (suspend (Invitation, Member) -> Result<Unit>)? = null
+
     suspend fun useInvitation(
         code: String,
         userName: String,
@@ -1066,40 +1081,31 @@ class FinanceRepository(private val db: AppDatabase) {
     ): Result<Member> {
         val normalized = code.trim().uppercase()
 
-        // 1. Buscar en la base local (mismo dispositivo)
-        var inv = invitationDao.getInvitationByCode(normalized)
+        // 1. La copia de la nube manda: trae al dia los usos y la revocacion.
+        //    Se guarda en local para dejar constancia de la invitacion usada.
+        val remote = runCatching { cloudInvitationLookup?.invoke(normalized) }.getOrNull()
+        if (remote != null) invitationDao.insertInvitation(remote)
 
-        // 2. Si no esta, buscarla en la nube (otro dispositivo la creo)
-        if (inv == null) {
-            val remote = runCatching { cloudInvitationLookup?.invoke(normalized) }.getOrNull()
-            if (remote != null) {
-                // Se guarda en local para poder validarla y consumirla con el
-                // mismo flujo que una invitacion nativa
-                invitationDao.insertInvitation(remote)
-                inv = remote
-            }
-        }
-
-        if (inv == null) {
-            return Result.failure(
+        // 2. Si la nube no responde, la copia local (mismo dispositivo)
+        val inv = remote ?: invitationDao.getInvitationByCode(normalized)
+            ?: return Result.failure(
                 IllegalArgumentException(
                     "Código de invitación no válido o no encontrado. " +
                     "Comprueba que lo has copiado bien y que tienes conexión."
                 )
             )
-        }
 
         // PRIMERO: si esta cuenta ya pertenece al grupo, se devuelve su ficha tal
         // cual. Es importante comprobarlo ANTES de validar caducidad o usos: si no,
         // al reintentar (por ejemplo tras un aviso de error) la invitacion ya
-        // figuraba como usada y se creaba una ficha DUPLICADA del mismo socio.
+        // figuraba como usada y se rechazaba a quien ya estaba dentro.
+        // Pertenecer es tener ficha activa Y figurar en la lista de acceso. Una
+        // ficha sin acceso (union que quedo a medias, o socio retirado que
+        // vuelve) tiene que pasar de nuevo por la union completa.
         if (googleUid.isNotBlank()) {
-            memberDao.getMemberByGoogleUidInGroup(googleUid, inv.groupId)?.let { existente ->
-                // Se asegura de que conste como miembro con acceso
-                val actuales = groupDao.getGroupById(inv.groupId)?.memberUids ?: emptyList()
-                if (!actuales.contains(googleUid)) {
-                    setGroupMemberUids(inv.groupId, actuales + googleUid)
-                }
+            val existente = memberDao.getMemberByGoogleUidInGroup(googleUid, inv.groupId)
+            val conAcceso = groupDao.getGroupById(inv.groupId)?.memberUids?.contains(googleUid) == true
+            if (existente != null && existente.active && conAcceso) {
                 return Result.success(existente)
             }
         }
@@ -1115,18 +1121,43 @@ class FinanceRepository(private val db: AppDatabase) {
         }
 
         val newMember = buildInvitedMember(inv, userName, userEmail, googleUid)
+        val updatedInvitation = inv.copy(usedCount = inv.usedCount + 1)
+
+        // Con cuenta de Google, la union se hace PRIMERO en la nube y de una
+        // sola vez. Solo si Firebase la acepta se refleja en local: asi no
+        // queda una ficha creada en el movil sin acceso real a la empresa.
+        val join = cloudJoin
+        if (join != null && googleUid.isNotBlank()) {
+            join(inv, newMember).onFailure {
+                return Result.failure(
+                    IllegalStateException(
+                        "No se pudo completar la unión a la empresa. Comprueba tu " +
+                        "conexión y que la invitación siga vigente, e inténtalo de nuevo."
+                    )
+                )
+            }
+            memberDao.insertMember(newMember)
+            // Ya esta todo subido: se actualiza lo local SIN avisar a la nube.
+            // (Reenviar desde aqui la lista de acceso pisaria la del servidor
+            // con la copia de este movil, que puede estar incompleta.)
+            groupDao.getGroupById(inv.groupId)?.let { grupo ->
+                if (googleUid !in grupo.memberUids) {
+                    groupDao.insertGroup(grupo.copy(memberUids = grupo.memberUids + googleUid))
+                }
+            }
+            invitationDao.updateInvitation(updatedInvitation)
+            return Result.success(newMember)
+        }
+
+        // Sin nube (o sin cuenta de Google): flujo solo local
         memberDao.insertMember(newMember)
         notifyMember(newMember)
 
-        // Anadir el UID del nuevo socio a la lista de acceso de la empresa,
-        // en local y en la nube.
         if (googleUid.isNotBlank()) {
             val actuales = groupDao.getGroupById(inv.groupId)?.memberUids ?: emptyList()
             setGroupMemberUids(inv.groupId, actuales + googleUid)
         }
 
-        // Consumir la invitacion en local y en la nube
-        val updatedInvitation = inv.copy(usedCount = inv.usedCount + 1)
         invitationDao.updateInvitation(updatedInvitation)
         notifyInvitation(updatedInvitation)
 
