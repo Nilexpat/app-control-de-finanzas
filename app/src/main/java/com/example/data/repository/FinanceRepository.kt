@@ -660,6 +660,7 @@ class FinanceRepository(private val db: AppDatabase) {
 
         // Mark group last disbursement
         groupDao.updateLastDisbursementAt(groupId, now)
+        groupDao.getGroupById(groupId)?.let { notifyGroup(it) }
 
         val notif = NotificationItem(
             groupId = groupId,
@@ -681,6 +682,7 @@ class FinanceRepository(private val db: AppDatabase) {
         }
         val now = System.currentTimeMillis()
         groupDao.updateCurrentPeriodStart(groupId, now)
+        groupDao.getGroupById(groupId)?.let { notifyGroup(it) }
 
         val notif = NotificationItem(
             groupId = groupId,
@@ -695,6 +697,7 @@ class FinanceRepository(private val db: AppDatabase) {
 
     suspend fun updateGroupSettlementMode(groupId: String, mode: String) {
         groupDao.updateSettlementMode(groupId, mode)
+        groupDao.getGroupById(groupId)?.let { notifyGroup(it) }
     }
 
     // --- Quick Change Payment Method (Admin) ---
@@ -864,7 +867,9 @@ class FinanceRepository(private val db: AppDatabase) {
         if (newName.isBlank()) return Result.failure(IllegalArgumentException("El nombre no puede estar vacío"))
         if (currentUser.role != Role.ADMIN) return Result.failure(IllegalAccessException("Solo un Admin puede renombrar la empresa"))
         val group = groupDao.getGroupById(groupId) ?: return Result.failure(IllegalArgumentException("Empresa no encontrada"))
-        groupDao.updateGroup(group.copy(name = newName.trim()))
+        val renamed = group.copy(name = newName.trim())
+        groupDao.updateGroup(renamed)
+        notifyGroup(renamed)
         return Result.success(Unit)
     }
 
@@ -892,7 +897,9 @@ class FinanceRepository(private val db: AppDatabase) {
             return Result.failure(IllegalAccessException("Solo un Admin puede archivar productos"))
         }
         val p = productDao.getProductById(productId) ?: return Result.failure(IllegalArgumentException("Producto no encontrado"))
-        productDao.updateProduct(p.copy(isArchived = true))
+        val archived = p.copy(isArchived = true)
+        productDao.updateProduct(archived)
+        notifyProduct(archived)
         return Result.success(Unit)
     }
 
@@ -911,7 +918,9 @@ class FinanceRepository(private val db: AppDatabase) {
                 return Result.failure(IllegalStateException("El último Admin no puede ser degradado sin nombrar antes a otro Admin"))
             }
         }
-        memberDao.updateMember(target.copy(role = newRole))
+        val updated = target.copy(role = newRole)
+        memberDao.updateMember(updated)
+        notifyMember(updated)
         return Result.success(Unit)
     }
 
@@ -1011,7 +1020,11 @@ class FinanceRepository(private val db: AppDatabase) {
             return Result.failure(IllegalAccessException("Solo un Admin puede configurar los porcentajes"))
         }
         val target = memberDao.getMemberById(memberId) ?: return Result.failure(IllegalArgumentException("Miembro no encontrado"))
-        memberDao.updateMember(target.copy(sharePercentCentecimas = newShareCentecimas))
+        val updated = target.copy(sharePercentCentecimas = newShareCentecimas)
+        memberDao.updateMember(updated)
+        // Sin este aviso el porcentaje se quedaba solo en este movil y, al
+        // reabrir la app, la nube devolvia el valor anterior.
+        notifyMember(updated)
         return Result.success(Unit)
     }
 
@@ -1321,6 +1334,7 @@ class FinanceRepository(private val db: AppDatabase) {
             ?.let { matched ->
                 val updated = matched.copy(googleUid = googleUid)
                 memberDao.updateMember(updated)
+                notifyMember(updated)
                 return updated
             }
 
