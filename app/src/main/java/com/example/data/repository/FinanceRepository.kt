@@ -165,10 +165,15 @@ class FinanceRepository(private val db: AppDatabase) {
             return Result.failure(IllegalStateException("No se pueden registrar movimientos en un corte cerrado ($monthKey)"))
         }
 
-        // Rule: For loans, Socio can only register for themselves
+        // Rule: For loans, Socio can only register for themselves.
+        // Se usa SU FICHA EN ESTA EMPRESA: la sesion puede tener cargada su ficha
+        // de identidad o la de otra empresa, y con ese id la deuda no le contaba.
+        val selfInGroup = currentUser.googleUid.takeIf { it.isNotBlank() }
+            ?.let { memberDao.getMemberByGoogleUidInGroup(it, groupId) }
+            ?: currentUser
         val finalDebtorId = if (type == MovementType.PRESTAMO || type == MovementType.ABONO) {
             if (currentUser.role == Role.SOCIO) {
-                currentUser.id
+                selfInGroup.id
             } else {
                 debtorMemberId ?: currentUser.id
             }
@@ -176,7 +181,7 @@ class FinanceRepository(private val db: AppDatabase) {
 
         val finalDebtorName = if (type == MovementType.PRESTAMO || type == MovementType.ABONO) {
             if (currentUser.role == Role.SOCIO) {
-                currentUser.name
+                selfInGroup.name
             } else {
                 debtorMemberName ?: currentUser.name
             }
@@ -480,6 +485,49 @@ class FinanceRepository(private val db: AppDatabase) {
         return SettlementCalculator.carriedDebts(members, movementsBefore, discounts)
     }
 
+    /**
+     * Asigna cada prestamo y abono a la ficha ACTIVA de su socio en esta empresa.
+     *
+     * Un mismo socio puede figurar con varios ids: su ficha de identidad
+     * ("profile_<uid>"), una ficha anterior a reincorporarse, o una ficha con
+     * otro id en otro movil. Si el prestamo quedo a nombre de uno de esos ids,
+     * no coincidia con su ficha activa y su deuda aparecia en cero.
+     *
+     * Se resuelve por cuenta de Google y, como ultimo recurso, por el nombre
+     * guardado en el prestamo (solo si ese nombre es de un unico socio).
+     */
+    private suspend fun withResolvedDebtors(
+        groupId: String,
+        movements: List<Movement>,
+        activeMembers: List<Member>
+    ): List<Movement> {
+        val activeIds = activeMembers.map { it.id }.toSet()
+        val activeByUid = activeMembers
+            .filter { it.googleUid.isNotBlank() }
+            .associate { it.googleUid to it.id }
+        val activeByName = activeMembers
+            .groupBy { it.name.trim().lowercase() }
+            .filterValues { it.size == 1 }
+            .mapValues { it.value.first().id }
+        // Todas las fichas conocidas (tambien inactivas y de identidad) -> su cuenta
+        val uidById = (memberDao.getMembersByGroup(groupId).first() + memberDao.getMembersByGroup("").first())
+            .filter { it.googleUid.isNotBlank() }
+            .associate { it.id to it.googleUid }
+
+        return movements.map { m ->
+            if (m.type != MovementType.PRESTAMO && m.type != MovementType.ABONO) return@map m
+            val raw = m.debtorMemberId ?: m.registeredByUserId
+            if (raw in activeIds) return@map m
+
+            val uid = uidById[raw]
+                ?: raw.removePrefix("profile_").takeIf { raw.startsWith("profile_") }
+                ?: raw.removePrefix("user_${groupId}_").takeIf { raw.startsWith("user_${groupId}_") }
+            val resolved = uid?.let { activeByUid[it] }
+                ?: m.debtorMemberName?.let { activeByName[it.trim().lowercase()] }
+            if (resolved != null) m.copy(debtorMemberId = resolved) else m
+        }
+    }
+
     /** Momento en que termina lo que cubre un corte cerrado. */
     private fun settlementEnd(s: Settlement): Long =
         if (s.periodEndAt > 0) s.periodEndAt
@@ -494,8 +542,8 @@ class FinanceRepository(private val db: AppDatabase) {
             val isDisbursed = group.lastDisbursementAt >= periodStart && group.lastDisbursementAt > 0
             val periodEnd = if (isDisbursed) group.lastDisbursementAt else System.currentTimeMillis()
 
-            val allMovements = movementDao.getMovementsByGroup(groupId).first()
             val members = memberDao.getActiveMembersByGroup(groupId).first()
+            val allMovements = withResolvedDebtors(groupId, movementDao.getMovementsByGroup(groupId).first(), members)
 
             val periodMovements = allMovements.filter {
                 if (isDisbursed) {
@@ -531,8 +579,8 @@ class FinanceRepository(private val db: AppDatabase) {
         }
 
         // Dynamic calculation
-        val allMovements = movementDao.getMovementsByGroup(groupId).first()
         val members = memberDao.getActiveMembersByGroup(groupId).first()
+        val allMovements = withResolvedDebtors(groupId, movementDao.getMovementsByGroup(groupId).first(), members)
 
         val monthMovements = allMovements.filter {
             DateFormatter.toMonthKey(it.occurredAt) == monthKey
@@ -663,7 +711,7 @@ class FinanceRepository(private val db: AppDatabase) {
         val periodStart = if (group.currentPeriodStartAt > 0) group.currentPeriodStartAt else group.createdAt
         val now = System.currentTimeMillis()
 
-        val allMovements = movementDao.getMovementsByGroup(groupId).first()
+        val allMovements = withResolvedDebtors(groupId, movementDao.getMovementsByGroup(groupId).first(), members)
         val periodMovements = allMovements.filter { it.occurredAt >= periodStart && it.occurredAt <= now }
 
         val summary = SettlementCalculator.calculateSettlement(
