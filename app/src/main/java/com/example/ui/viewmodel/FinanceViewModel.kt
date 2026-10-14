@@ -871,6 +871,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun deleteNotification(id: String) {
+        viewModelScope.launch { repository.deleteNotification(id) }
+    }
+
     fun markNotificationsRead() {
         val gId = _selectedGroupId.value ?: return
         viewModelScope.launch {

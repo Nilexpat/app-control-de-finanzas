@@ -121,6 +121,9 @@ class FinanceRepository(private val db: AppDatabase) {
     fun getNotifications(groupId: String): Flow<List<NotificationItem>> = notificationDao.getNotificationsByGroup(groupId)
     fun getUnreadNotificationsCount(groupId: String): Flow<Int> = notificationDao.getUnreadCount(groupId)
 
+    /** Las notificaciones solo existen en este movil: borrarla no afecta a nadie mas. */
+    suspend fun deleteNotification(id: String) = notificationDao.deleteNotification(id)
+
     suspend fun markAllNotificationsRead(groupId: String) {
         notificationDao.markAllAsRead(groupId)
     }

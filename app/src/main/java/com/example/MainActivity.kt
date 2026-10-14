@@ -5,6 +5,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -166,8 +173,23 @@ class MainActivity : ComponentActivity() {
                         contentWindowInsets = WindowInsets.safeDrawing,
                         modifier = Modifier.fillMaxSize()
                     ) { innerPadding ->
-                        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                            when (currentTab) {
+                        // Al cambiar de pestana, la nueva entra deslizandose desde el
+                        // lado en el que esta en la barra inferior y la anterior sale
+                        // por el contrario.
+                        AnimatedContent(
+                            targetState = currentTab,
+                            transitionSpec = {
+                                val haciaLaDerecha = targetState.ordinal > initialState.ordinal
+                                val sentido = if (haciaLaDerecha) 1 else -1
+                                (slideInHorizontally(tween(300)) { ancho -> sentido * ancho } + fadeIn(tween(300)))
+                                    .togetherWith(
+                                        slideOutHorizontally(tween(300)) { ancho -> -sentido * ancho / 3 } + fadeOut(tween(200))
+                                    )
+                            },
+                            label = "cambio_de_pestana",
+                            modifier = Modifier.fillMaxSize().padding(innerPadding)
+                        ) { pestana ->
+                            when (pestana) {
                                 MainNavTab.INICIO -> {
                                     DashboardScreen(
                                         viewModel = viewModel,

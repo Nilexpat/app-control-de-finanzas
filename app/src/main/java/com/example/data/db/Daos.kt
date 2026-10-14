@@ -198,6 +198,9 @@ interface NotificationDao {
 
     @Query("UPDATE notifications SET isRead = 1 WHERE groupId = :groupId")
     suspend fun markAllAsRead(groupId: String)
+
+    @Query("DELETE FROM notifications WHERE id = :id")
+    suspend fun deleteNotification(id: String)
 }
 
 @Dao
