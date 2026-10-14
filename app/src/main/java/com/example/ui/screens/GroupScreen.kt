@@ -446,6 +446,10 @@ fun GroupScreen(    viewModel: FinanceViewModel,
             // Card for Empresa (Fondo Común y Liquidez)
             item {
                 val totalLiquidCash = settlementSummary?.moneyLocations?.filter { !it.isSubRow }?.sumOf { it.netCop } ?: 0L
+                // Lo prestado sigue siendo de la empresa: los socios lo deben
+                val porCobrar = settlementSummary?.distributions
+                    ?.filter { !it.isCompany }
+                    ?.sumOf { it.debtCop } ?: 0L
 
                 Card(
                     modifier = Modifier
@@ -508,13 +512,30 @@ fun GroupScreen(    viewModel: FinanceViewModel,
 
                         Spacer(modifier = Modifier.width(12.dp))
 
-                        Text(
-                            text = if (totalLiquidCash >= 0) "+ ${CurrencyFormatter.formatCop(totalLiquidCash)}" else "- ${CurrencyFormatter.formatCop(kotlin.math.abs(totalLiquidCash))}",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                            color = Color(0xFFD4F73C),
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = if (totalLiquidCash >= 0) "+ ${CurrencyFormatter.formatCop(totalLiquidCash)}" else "- ${CurrencyFormatter.formatCop(kotlin.math.abs(totalLiquidCash))}",
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFFD4F73C),
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                            Text(
+                                text = "en caja",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.8f)
+                            )
+                            if (porCobrar > 0) {
+                                Text(
+                                    text = "+ ${CurrencyFormatter.formatCop(porCobrar)} por cobrar a socios",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
                     }
                 }
             }

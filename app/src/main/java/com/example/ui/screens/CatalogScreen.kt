@@ -243,7 +243,8 @@ fun CatalogScreen(
                                 viewModel.addProductToDraftAndPrepare(product, 1, MovementType.COMPRA)
                                 onNavigateToRegisterWithType(MovementType.COMPRA)
                             },
-                            onArchive = { viewModel.archiveProduct(product.id) }
+                            onArchive = { viewModel.archiveProduct(product.id) },
+                            onUnarchive = { viewModel.unarchiveProduct(product.id) }
                         )
                     }
                     item {
@@ -296,7 +297,8 @@ fun ProductGridCard(
     isAdmin: Boolean,
     onSell: () -> Unit = {},
     onBuy: () -> Unit = {},
-    onArchive: () -> Unit
+    onArchive: () -> Unit,
+    onUnarchive: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier
@@ -394,6 +396,25 @@ fun ProductGridCard(
                     Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Archivar", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
+                }
+            }
+
+            // Un producto archivado se puede devolver al catalogo
+            if (isAdmin && product.isArchived) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onUnarchive,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFF2563EB)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(36.dp)
+                        .testTag("unarchive_btn_${product.id}"),
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) {
+                    Icon(Icons.Default.Unarchive, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color(0xFF2563EB))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Desarchivar", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color(0xFF2563EB))
                 }
             }
         }

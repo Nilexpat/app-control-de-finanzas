@@ -738,6 +738,22 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun unarchiveProduct(productId: String) {
+        val user = _currentMember.value ?: return
+        if (user.role != Role.ADMIN) {
+            showMessage("Solo el administrador puede desarchivar productos", isError = true)
+            return
+        }
+        viewModelScope.launch {
+            val result = repository.unarchiveProduct(productId, user)
+            result.onSuccess {
+                showMessage("Producto de nuevo en el catálogo")
+            }.onFailure { err ->
+                showMessage(err.message ?: "Error al desarchivar", isError = true)
+            }
+        }
+    }
+
     fun createInvitation(role: Role, hoursValid: Int, maxUses: Int, onCreated: (Invitation) -> Unit) {
         val user = _currentMember.value ?: return
         val gId = _selectedGroupId.value ?: return

@@ -450,6 +450,41 @@ class FinanceRepository(private val db: AppDatabase) {
 
     // --- Settlements / Cortes ---
 
+    /**
+     * Deuda que cada socio arrastra al empezar un corte (ver
+     * SettlementCalculator.carriedDebts). Sin esto, la deuda que no se cubria
+     * en un reparto desaparecia en el corte siguiente y la terminaban pagando
+     * los demas socios.
+     */
+    private suspend fun carriedDebtsBefore(
+        groupId: String,
+        periodStart: Long,
+        members: List<Member>,
+        allMovements: List<Movement>
+    ): Map<String, Long> {
+        val movementsBefore = allMovements.filter { it.occurredAt < periodStart }
+
+        // Lo que ya se desconto a cada socio en cortes cerrados anteriores
+        val discounts = mutableMapOf<String, Long>()
+        settlementDao.getSettlementsByGroup(groupId).first()
+            .filter { it.isClosed && settlementEnd(it) in 1..periodStart }
+            .forEach { s ->
+                JsonHelper.deserializeSettlementSummary(s.frozenSnapshotJson)
+                    ?.distributions
+                    ?.forEach { d ->
+                        val id = d.memberId?.takeIf { it.isNotBlank() } ?: return@forEach
+                        discounts[id] = (discounts[id] ?: 0L) + d.discountCop
+                    }
+            }
+
+        return SettlementCalculator.carriedDebts(members, movementsBefore, discounts)
+    }
+
+    /** Momento en que termina lo que cubre un corte cerrado. */
+    private fun settlementEnd(s: Settlement): Long =
+        if (s.periodEndAt > 0) s.periodEndAt
+        else DateFormatter.monthStartMillis(DateFormatter.nextMonthKey(s.monthKey))
+
     suspend fun getSettlementSummary(groupId: String, monthKey: String): SettlementSummary {
         val group = groupDao.getGroupById(groupId)
         val isDisbursementMode = group?.settlementMode == "DESEMBOLSO"
@@ -478,6 +513,7 @@ class FinanceRepository(private val db: AppDatabase) {
                 movements = periodMovements,
                 members = members,
                 companyShareCentecimas = companyShare,
+                historicalDebtsByMember = carriedDebtsBefore(groupId, periodStart, members, allMovements),
                 isClosed = isDisbursed,
                 closedAt = if (isDisbursed) group.lastDisbursementAt else null,
                 closedByName = if (isDisbursed) "Administrador" else null,
@@ -511,6 +547,9 @@ class FinanceRepository(private val db: AppDatabase) {
             movements = monthMovements,
             members = members,
             companyShareCentecimas = companyShare,
+            historicalDebtsByMember = carriedDebtsBefore(
+                groupId, DateFormatter.monthStartMillis(monthKey), members, allMovements
+            ),
             isClosed = settlement?.isClosed ?: false,
             closedAt = settlement?.closedAt,
             closedByName = settlement?.closedByName,
@@ -632,6 +671,7 @@ class FinanceRepository(private val db: AppDatabase) {
             movements = periodMovements,
             members = members,
             companyShareCentecimas = companyShare,
+            historicalDebtsByMember = carriedDebtsBefore(groupId, periodStart, members, allMovements),
             isClosed = true,
             closedAt = now,
             closedByName = currentUser.name,
@@ -892,14 +932,21 @@ class FinanceRepository(private val db: AppDatabase) {
         return Result.success(Unit)
     }
 
-    suspend fun archiveProduct(productId: String, currentUser: Member): Result<Unit> {
+    suspend fun archiveProduct(productId: String, currentUser: Member): Result<Unit> =
+        setProductArchived(productId, archived = true, currentUser = currentUser)
+
+    /** Devuelve un producto archivado al catalogo activo. */
+    suspend fun unarchiveProduct(productId: String, currentUser: Member): Result<Unit> =
+        setProductArchived(productId, archived = false, currentUser = currentUser)
+
+    private suspend fun setProductArchived(productId: String, archived: Boolean, currentUser: Member): Result<Unit> {
         if (currentUser.role != Role.ADMIN) {
-            return Result.failure(IllegalAccessException("Solo un Admin puede archivar productos"))
+            return Result.failure(IllegalAccessException("Solo un Admin puede archivar o desarchivar productos"))
         }
         val p = productDao.getProductById(productId) ?: return Result.failure(IllegalArgumentException("Producto no encontrado"))
-        val archived = p.copy(isArchived = true)
-        productDao.updateProduct(archived)
-        notifyProduct(archived)
+        val updated = p.copy(isArchived = archived)
+        productDao.updateProduct(updated)
+        notifyProduct(updated)
         return Result.success(Unit)
     }
 

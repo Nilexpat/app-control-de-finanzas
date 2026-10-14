@@ -131,6 +131,17 @@ object DateFormatter {
         }
     }
 
+    /** Medianoche (hora de Bogota) del primer dia del mes "yyyy-MM". */
+    fun monthStartMillis(monthKey: String): Long {
+        return try {
+            val parts = monthKey.split("-")
+            LocalDate.of(parts[0].toInt(), parts[1].toInt(), 1)
+                .atStartOfDay(BOGOTA_ZONE).toInstant().toEpochMilli()
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
     fun nextMonthKey(monthKey: String): String {
         return try {
             val parts = monthKey.split("-")

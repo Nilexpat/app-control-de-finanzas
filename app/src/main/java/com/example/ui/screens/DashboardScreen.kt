@@ -311,13 +311,16 @@ fun DashboardScreen(
                             bgColor = Color.White,
                             modifier = Modifier.weight(1f)
                         )
+                        // Un prestamo no es un gasto de la empresa: es lo que
+                        // los socios le deben. Se muestra la deuda pendiente.
                         SummaryMetricCard(
-                            title = "Préstamos",
-                            amountCop = summary?.totalLoansCop ?: 0L,
+                            title = "Deudas por cobrar",
+                            amountCop = summary?.distributions
+                                ?.filter { !it.isCompany }
+                                ?.sumOf { it.debtCop } ?: 0L,
                             icon = Icons.Default.Handshake,
                             color = FinanceOrange,
                             bgColor = FinanceOrangeBg,
-                            prefix = "−",
                             modifier = Modifier.weight(1f)
                         )
                     }

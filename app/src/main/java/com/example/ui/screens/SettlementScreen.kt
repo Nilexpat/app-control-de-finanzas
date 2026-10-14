@@ -28,6 +28,7 @@ import com.example.data.model.Settlement
 import com.example.ui.components.CompanyProfileHeaderTitle
 import com.example.ui.components.CompanySwitcherDialog
 import com.example.ui.components.CreateCompanyDialog
+import com.example.ui.components.SalesPatternsCard
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.FinanceViewModel
 import com.example.util.CurrencyFormatter
@@ -48,6 +49,8 @@ fun SettlementScreen(
     val selectedMonthKey by viewModel.selectedMonthKey.collectAsStateWithLifecycle()
     val isAccumulated by viewModel.isAccumulatedView.collectAsStateWithLifecycle()
     val settlementsHistory by viewModel.settlementsHistory.collectAsStateWithLifecycle()
+    val movements by viewModel.movements.collectAsStateWithLifecycle()
+    val products by viewModel.products.collectAsStateWithLifecycle()
 
     val activeGroup = groups.firstOrNull { it.id == selectedGroupId }
     val activeGroupName = activeGroup?.name ?: "SocioFinanzas"
@@ -548,6 +551,11 @@ fun SettlementScreen(
                         }
                     }
                 }
+            }
+
+            // CUANDO SE VENDE MAS: dias, horas y curva de ventas
+            item {
+                SalesPatternsCard(movements = movements, products = products)
             }
 
             item {

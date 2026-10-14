@@ -5,6 +5,43 @@ import com.example.data.model.*
 object SettlementCalculator {
 
     /**
+     * Deuda con la que cada socio ENTRA a un corte.
+     *
+     * Un prestamo es una deuda personal de quien lo pidio, no una perdida de la
+     * empresa: sigue debiendose hasta que se paga, sea con abonos o con la parte
+     * de utilidades que se le descuenta en un reparto. Por eso la deuda pasa de
+     * un corte al siguiente:
+     *
+     *   deuda inicial + prestamos anteriores - abonos anteriores
+     *   - lo que ya se le desconto en cortes cerrados anteriores
+     *
+     * @param movementsBefore movimientos de ANTES del corte (los anulados se ignoran).
+     * @param discountsApplied descuentos por deuda ya aplicados, por socio.
+     */
+    fun carriedDebts(
+        members: List<Member>,
+        movementsBefore: List<Movement>,
+        discountsApplied: Map<String, Long>
+    ): Map<String, Long> {
+        val balance = mutableMapOf<String, Long>()
+        for (m in movementsBefore) {
+            if (m.isAnnulled) continue
+            val debtorId = m.debtorMemberId ?: m.registeredByUserId
+            when (m.type) {
+                MovementType.PRESTAMO -> balance[debtorId] = (balance[debtorId] ?: 0L) + m.totalCop
+                MovementType.ABONO -> balance[debtorId] = (balance[debtorId] ?: 0L) - m.totalCop
+                else -> Unit
+            }
+        }
+        return members.associate { member ->
+            val debt = member.initialDebtCop +
+                (balance[member.id] ?: 0L) -
+                (discountsApplied[member.id] ?: 0L)
+            member.id to debt.coerceAtLeast(0L)
+        }
+    }
+
+    /**
      * Calculates the entire settlement for a set of movements and member configurations.
      * All numbers are Long integers (COP pesos).
      */
